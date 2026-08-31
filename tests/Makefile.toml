@@ -8,6 +8,7 @@ CARGO_MAKE_CRATE_WORKSPACE_MEMBERS = [
   "customized-config-toml-workspace",
   "mixed-package-kmdf-workspace",
   "umdf-driver-workspace",
+  "wdk-alloc-tests",
   "wdk-macros-tests",
   "wdk-sys-tests",
 ]

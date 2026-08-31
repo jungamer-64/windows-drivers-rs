@@ -1,0 +1,24 @@
+[package]
+description = "Integration tests for wdk-alloc that require a WDM configuration"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+name = "wdk-alloc-tests"
+publish = false
+rust-version = "1.91.0"
+version = "0.1.0"
+
+[package.metadata.wdk.driver-model]
+driver-type = "WDM"
+
+[lib]
+
+[dependencies]
+wdk-alloc = { path = "../../crates/wdk-alloc" }
+wdk-sys = { features = ["test-stubs"], path = "../../crates/wdk-sys" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"
+
+[lints.clippy]
+multiple_unsafe_ops_per_block = "forbid"
+undocumented_unsafe_blocks = "forbid"

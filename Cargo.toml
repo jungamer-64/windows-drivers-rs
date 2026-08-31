@@ -9,6 +9,7 @@ exclude = [
   "tests/config-kmdf",
   "tests/config-umdf",
   "tests/config-wdm",
+  "tests/wdk-alloc-tests",
   "tests/wdk-macros-tests",
   "tests/wdk-sys-tests",
 ]
