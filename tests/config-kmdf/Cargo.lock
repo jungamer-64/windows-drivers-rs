@@ -221,6 +221,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "config-kmdf"
 version = "0.1.0"
 dependencies = [
+ "wdk",
  "wdk-macros-tests",
  "wdk-sys",
 ]
@@ -821,6 +822,17 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "wdk"
+version = "0.4.1"
+dependencies = [
+ "cfg-if",
+ "tracing",
+ "tracing-subscriber",
+ "wdk-build",
+ "wdk-sys",
+]
 
 [[package]]
 name = "wdk-build"

@@ -36,6 +36,9 @@ mod print;
 /// environments.
 pub mod fmt;
 
+#[cfg(any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF"))]
+pub mod file_system;
+
 #[cfg(any(driver_model__driver_type = "KMDF", driver_model__driver_type = "UMDF"))]
 pub mod wdf;
 

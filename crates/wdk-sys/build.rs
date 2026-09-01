@@ -41,6 +41,7 @@ const WDFFUNCTIONS_SYMBOL_NAME_PLACEHOLDER: &str =
     "<PLACEHOLDER FOR LITERAL VALUE CONTAINING WDFFUNCTIONS SYMBOL NAME>";
 const WDF_FUNCTION_COUNT_PLACEHOLDER: &str =
     "<PLACEHOLDER FOR EXPRESSION FOR NUMBER OF WDF FUNCTIONS IN `wdk_sys::WdfFunctions`";
+const NTIFS_EXPORTS_SOURCE: &str = "src/ntifs_exports.c";
 
 const WDF_FUNCTION_COUNT_DECLARATION_EXTERNAL_SYMBOL: &str =
     "// SAFETY: `crate::WdfFunctionCount` is generated as a mutable static, but is not supposed \
@@ -282,6 +283,24 @@ fn generate_base(out_path: &Path, config: &Config) -> Result<(), ConfigError> {
     trace!(bindgen_builder = ?bindgen_builder);
 
     let output_file_path = out_path.join(format!("{outfile_name}.rs"));
+    Ok(bindgen_builder
+        .generate()
+        .expect("Bindings should succeed to generate")
+        .write_to_file(&output_file_path)
+        .map_err(|source| IoError::with_path(output_file_path, source))?)
+}
+
+/// Generates declarations for the checked-in `ntifs.h` export translation unit.
+fn generate_ntifs_exports(out_path: &Path, config: &Config) -> Result<(), ConfigError> {
+    info!("Generating bindings to checked-in ntifs.h exports");
+
+    let bindgen_builder = bindgen::Builder::wdk_default(config)?
+        .with_codegen_config(CodegenConfig::FUNCTIONS)
+        .allowlist_function("wdk_sys_.*")
+        .header(NTIFS_EXPORTS_SOURCE);
+    trace!(bindgen_builder = ?bindgen_builder);
+
+    let output_file_path = out_path.join("ntifs_exports.rs");
     Ok(bindgen_builder
         .generate()
         .expect("Bindings should succeed to generate")
@@ -662,6 +681,45 @@ fn start_bindgen_tasks<'scope>(
     });
 }
 
+/// Starts the WDM/KMDF task that generates and compiles the checked-in
+/// `ntifs.h` export translation unit.
+fn start_ntifs_export_task<'scope>(
+    thread_scope: &'scope thread::Scope<'scope, '_>,
+    out_path: &'scope Path,
+    config: &'scope Config,
+    thread_join_handles: &mut Vec<thread::ScopedJoinHandle<'scope, Result<(), ConfigError>>>,
+) {
+    if !matches!(
+        config.driver_config,
+        DriverConfig::Wdm | DriverConfig::Kmdf(_)
+    ) {
+        return;
+    }
+
+    let current_span = Span::current();
+    thread_join_handles.push(
+        thread::Builder::new()
+            .name("ntifs exports generation and compilation".to_string())
+            .spawn_scoped(thread_scope, move || {
+                info_span!(parent: current_span, "ntifs exports").in_scope(|| {
+                    generate_ntifs_exports(out_path, config)?;
+
+                    let mut cc_builder = cc::Build::new();
+                    for (key, value) in config.preprocessor_definitions() {
+                        cc_builder.define(&key, value.as_deref());
+                    }
+
+                    cc_builder
+                        .includes(config.include_paths()?)
+                        .file(NTIFS_EXPORTS_SOURCE)
+                        .compile("ntifs_exports");
+                    Ok::<(), ConfigError>(())
+                })
+            })
+            .expect("Scoped Thread should spawn successfully"),
+    );
+}
+
 /// Starts a task that compiles a C shim to expose WDF symbols hidden by
 /// `__declspec(selectany)`.
 fn start_wdf_symbol_export_tasks<'scope>(
@@ -780,6 +838,7 @@ fn join_worker_threads(
 
 fn main() -> anyhow::Result<()> {
     initialize_tracing()?;
+    println!("cargo:rerun-if-changed={NTIFS_EXPORTS_SOURCE}");
 
     configure_wdk_library_build_and_then(|config| {
         let out_path = PathBuf::from(
@@ -790,6 +849,7 @@ fn main() -> anyhow::Result<()> {
             let mut thread_join_handles = Vec::new();
 
             start_bindgen_tasks(thread_scope, &out_path, &config, &mut thread_join_handles);
+            start_ntifs_export_task(thread_scope, &out_path, &config, &mut thread_join_handles);
             start_wdf_artifact_tasks(thread_scope, &out_path, &config, &mut thread_join_handles)?;
 
             join_worker_threads(thread_join_handles)

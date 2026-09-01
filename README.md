@@ -73,6 +73,8 @@ The crates in this repository are available from [`crates.io`](https://crates.io
    target-umdf-version-minor = 33
    ```
 
+   Native file-system drivers use the existing WDM configuration (`driver-type = "WDM"`); no separate driver type or Cargo feature is required.
+
 1. **For Kernel Mode crates** (ex. `KMDF` drivers, `WDM` drivers): Set crate panic strategy to `abort` in `Cargo.toml`:
 
    ```toml

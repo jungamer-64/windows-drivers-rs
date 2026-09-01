@@ -13,9 +13,14 @@ target-kmdf-version-minor = 33
 
 [lib]
 
+[[test]]
+name = "native-fsd-api"
+path = "../native-fsd-api.rs"
+
 [dev-dependencies]
+wdk.path = "../../crates/wdk"
 wdk-macros-tests.path = "../wdk-macros-tests"
-wdk-sys.path = "../../crates/wdk-sys"
+wdk-sys = { features = ["test-stubs"], path = "../../crates/wdk-sys" }
 
 [features]
 nightly = ["wdk-sys/nightly"]

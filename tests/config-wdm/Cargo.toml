@@ -10,3 +10,11 @@ version = "0.1.0"
 driver-type = "WDM"
 
 [lib]
+
+[[test]]
+name = "native-fsd-api"
+path = "../native-fsd-api.rs"
+
+[dev-dependencies]
+wdk.path = "../../crates/wdk"
+wdk-sys = { features = ["test-stubs"], path = "../../crates/wdk-sys" }
