@@ -5,7 +5,13 @@
 
 VOID NTAPI wdk_sys_IoCompleteRequest(PIRP Irp, CCHAR PriorityBoost)
 {
+#if defined(WDK_SYS_TEST_STUBS)
+    // test-stubs suppresses kernel linking and does not model kernel behavior.
+    UNREFERENCED_PARAMETER(Irp);
+    UNREFERENCED_PARAMETER(PriorityBoost);
+#else
     IoCompleteRequest(Irp, PriorityBoost);
+#endif
 }
 
 PIO_STACK_LOCATION NTAPI wdk_sys_IoGetCurrentIrpStackLocation(PIRP Irp)
@@ -30,12 +36,16 @@ PDRIVER_CANCEL NTAPI wdk_sys_IoSetCancelRoutine(PIRP Irp, PDRIVER_CANCEL CancelR
 
 VOID NTAPI wdk_sys_FsRtlEnterFileSystem(VOID)
 {
+#if !defined(WDK_SYS_TEST_STUBS)
     FsRtlEnterFileSystem();
+#endif
 }
 
 VOID NTAPI wdk_sys_FsRtlExitFileSystem(VOID)
 {
+#if !defined(WDK_SYS_TEST_STUBS)
     FsRtlExitFileSystem();
+#endif
 }
 
 VOID NTAPI wdk_sys_FsRtlSetupAdvancedHeaderEx2(

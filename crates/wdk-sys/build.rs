@@ -708,9 +708,16 @@ fn start_ntifs_export_task<'scope>(
                     for (key, value) in config.preprocessor_definitions() {
                         cc_builder.define(&key, value.as_deref());
                     }
+                    if cfg!(feature = "test-stubs") {
+                        cc_builder.define("WDK_SYS_TEST_STUBS", None);
+                    }
 
                     cc_builder
                         .includes(config.include_paths()?)
+                        // Keep every header-only export independently discardable. Host-side
+                        // tests for driver crates must not acquire kernel imports from wrappers
+                        // that their reachable code does not use.
+                        .flag("/Gy")
                         .file(NTIFS_EXPORTS_SOURCE)
                         .compile("ntifs_exports");
                     Ok::<(), ConfigError>(())
