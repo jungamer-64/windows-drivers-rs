@@ -50,11 +50,11 @@ pub enum SignMode {
         verify_signature: bool,
         /// Additional `signtool sign` arguments.
         ///
-        /// When empty, run `signtool sign` with the auto-generated WDR test
-        /// certificate and default switches. When non-empty, auto generation
+        /// When `None`, run `signtool sign` with the auto-generated WDR test
+        /// certificate and default switches. When `Some`, auto generation
         /// is skipped and the caller owns the full signtool command line
         /// (certificate selection, digest, etc.).
-        signtool_args: Vec<String>,
+        signtool_args: Option<Vec<String>>,
     },
 }
 
@@ -85,6 +85,8 @@ pub struct PackageTaskParams<'a> {
     pub target_arch: &'a CpuArchitecture,
     pub sign_mode: SignMode,
     pub inf2cat_args: Option<Vec<String>>,
+    pub stampinf_args: Option<Vec<String>>,
+    pub infverif_args: Option<Vec<String>>,
     pub sample_class: bool,
     pub driver_model: DriverConfig,
     pub target_platform: TargetPlatform,
@@ -95,6 +97,8 @@ pub struct PackageTask<'a> {
     package_name: String,
     sign_mode: SignMode,
     inf2cat_args: Option<Vec<String>>,
+    stampinf_args: Option<Vec<String>>,
+    infverif_args: Option<Vec<String>>,
     sample_class: bool,
 
     // src paths
@@ -102,7 +106,6 @@ pub struct PackageTask<'a> {
     src_driver_binary_file_path: PathBuf,
     src_renamed_driver_binary_file_path: PathBuf,
     src_pdb_file_path: PathBuf,
-    src_map_file_path: PathBuf,
     src_cert_file_path: PathBuf,
 
     // destination paths
@@ -110,7 +113,6 @@ pub struct PackageTask<'a> {
     dest_inf_file_path: PathBuf,
     dest_driver_binary_path: PathBuf,
     dest_pdb_file_path: PathBuf,
-    dest_map_file_path: PathBuf,
     dest_cert_file_path: PathBuf,
     dest_cat_file_path: PathBuf,
 
@@ -172,10 +174,6 @@ impl<'a> PackageTask<'a> {
             .target_dir
             .join(format!("{package_name}.{src_driver_binary_extension}"));
         let src_pdb_file_path = params.target_dir.join(format!("{package_name}.pdb"));
-        let src_map_file_path = params
-            .target_dir
-            .join("deps")
-            .join(format!("{package_name}.map"));
         let src_cert_file_path = params.target_dir.join(format!("{WDR_LOCAL_TEST_CERT}.cer"));
 
         // destination paths
@@ -193,7 +191,6 @@ impl<'a> PackageTask<'a> {
         let dest_driver_binary_path =
             dest_root_package_folder.join(format!("{package_name}.{dest_driver_binary_extension}"));
         let dest_pdb_file_path = dest_root_package_folder.join(format!("{package_name}.pdb"));
-        let dest_map_file_path = dest_root_package_folder.join(format!("{package_name}.map"));
         let dest_cert_file_path =
             dest_root_package_folder.join(format!("{WDR_LOCAL_TEST_CERT}.cer"));
         let dest_cat_file_path = dest_root_package_folder.join(format!("{package_name}.cat"));
@@ -207,18 +204,18 @@ impl<'a> PackageTask<'a> {
             package_name,
             sign_mode: params.sign_mode,
             inf2cat_args: params.inf2cat_args,
+            stampinf_args: params.stampinf_args,
+            infverif_args: params.infverif_args,
             sample_class: params.sample_class,
             src_inx_file_path,
             src_driver_binary_file_path,
             src_renamed_driver_binary_file_path,
             src_pdb_file_path,
-            src_map_file_path,
             src_cert_file_path,
             dest_root_package_folder,
             dest_inf_file_path,
             dest_driver_binary_path,
             dest_pdb_file_path,
-            dest_map_file_path,
             dest_cert_file_path,
             dest_cat_file_path,
             arch: params.target_arch,
@@ -281,7 +278,6 @@ impl<'a> PackageTask<'a> {
         )?;
         self.copy(&self.src_pdb_file_path, &self.dest_pdb_file_path)?;
         self.copy(&self.src_inx_file_path, &self.dest_inf_file_path)?;
-        self.copy(&self.src_map_file_path, &self.dest_map_file_path)?;
         self.run_stampinf()?;
         self.run_inf2cat()?;
         self.run_infverif()?;
@@ -298,7 +294,9 @@ impl<'a> PackageTask<'a> {
             info!("Sign mode is 'off'; skipping signing");
             return Ok(());
         };
-        let sign_args = if signtool_args.is_empty() {
+        let sign_args = if let Some(args) = signtool_args {
+            args.clone()
+        } else {
             self.generate_certificate()?;
             self.copy(&self.src_cert_file_path, &self.dest_cert_file_path)?;
             // Default WDR test-cert switches.
@@ -315,8 +313,6 @@ impl<'a> PackageTask<'a> {
             ]
             .map(ToString::to_string)
             .to_vec()
-        } else {
-            signtool_args.clone()
         };
         self.run_signtool_sign(&self.dest_driver_binary_path, &sign_args)?;
         self.run_signtool_sign(&self.dest_cat_file_path, &sign_args)?;
@@ -384,40 +380,47 @@ impl<'a> PackageTask<'a> {
         let cat_file_path = format!("{}.cat", self.package_name);
         let dest_inf_file_path = self.dest_inf_file_path.to_string_lossy();
         let arch = self.arch.to_string();
-        let mut args: Vec<&str> = vec![
-            "-f",
-            &dest_inf_file_path,
-            "-d",
-            "*",
-            "-a",
-            &arch,
-            "-c",
-            &cat_file_path,
-        ];
+        let mut args: Vec<&str> = vec!["-f", &dest_inf_file_path];
 
-        match std::env::var(STAMPINF_VERSION_ENV_VAR) {
-            Ok(version) if !version.trim().is_empty() => {
-                // When STAMPINF_VERSION is set to a non-empty, non-whitespace
-                // value, we intentionally omit -v so stampinf
-                // reads it and populates DriverVer.
-                // (Whitespace-only values are ignored.)
-                debug!(
-                    DriverVer = version,
-                    "Using {STAMPINF_VERSION_ENV_VAR} env var to set DriverVer"
-                );
-            }
-            _ => {
-                args.extend(["-v", "*"]);
+        if !self.stampinf_args_contains("d") {
+            args.extend(["-d", "*"]);
+        }
+        args.extend(["-a", &arch, "-c", &cat_file_path]);
+        if self.stampinf_args_contains("v") {
+            debug!("Using -v from --stampinf-args to set DriverVer");
+        } else {
+            match std::env::var(STAMPINF_VERSION_ENV_VAR) {
+                Ok(version) if !version.trim().is_empty() => {
+                    // When STAMPINF_VERSION is set to a non-empty,
+                    // non-whitespace value, we intentionally omit -v so
+                    // stampinf reads it and populates DriverVer.
+                    // (Whitespace-only values are ignored.)
+                    debug!(
+                        DriverVer = version,
+                        "Using {STAMPINF_VERSION_ENV_VAR} env var to set DriverVer"
+                    );
+                }
+                _ => {
+                    args.extend(["-v", "*"]);
+                }
             }
         }
 
-        if !wdf_version_flags.is_empty() {
-            args.append(&mut wdf_version_flags.iter().map(String::as_str).collect());
+        args.extend(wdf_version_flags.iter().map(String::as_str));
+        if let Some(stampinf_args) = &self.stampinf_args {
+            args.extend(stampinf_args.iter().map(String::as_str));
         }
         if let Err(e) = self.command_exec.run("stampinf", &args, None, None) {
             return Err(PackageTaskError::StampinfCommand(e));
         }
         Ok(())
+    }
+
+    fn stampinf_args_contains(&self, arg_name: &str) -> bool {
+        self.stampinf_args.iter().flatten().any(|arg| {
+            arg.strip_prefix(['-', '/'])
+                .is_some_and(|arg| arg.eq_ignore_ascii_case(arg_name))
+        })
     }
 
     fn run_inf2cat(&self) -> Result<(), PackageTaskError> {
@@ -565,17 +568,19 @@ impl<'a> PackageTask<'a> {
 
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
-        // Determine the indices of password values (the token right after each
-        // `/p`) so they can be redacted by `run_with_redaction` in the logs.
-        // `value_index < file_operand_index` ensures a value token
-        // actually follows `/p` and that it is never the trailing file operand.
+        // Determine the indices of password values so they can be redacted by
+        // `run_with_redaction` in the logs.
+        // `value_index < file_operand_index` ensures a value token actually
+        // follows `-p` or `/p` and that it is never the trailing file operand.
         let file_operand_index = arg_refs.len() - 1;
         let redaction_indices: Vec<usize> = arg_refs
             .iter()
             .enumerate()
             .filter_map(|(i, arg)| {
                 let value_index = i + 1;
-                (arg.eq_ignore_ascii_case("/p") && value_index < file_operand_index)
+                (arg.strip_prefix(['-', '/'])
+                    .is_some_and(|arg| arg.eq_ignore_ascii_case("p"))
+                    && value_index < file_operand_index)
                     .then_some(value_index)
             })
             .collect();
@@ -641,6 +646,9 @@ impl<'a> PackageTask<'a> {
 
         if self.sample_class {
             args.push(additional_args);
+        }
+        if let Some(infverif_args) = &self.infverif_args {
+            args.extend(infverif_args.iter().map(String::as_str));
         }
         args.push(&inf_path);
 
@@ -734,9 +742,11 @@ mod tests {
             sample_class: false,
             sign_mode: SignMode::Test {
                 verify_signature: false,
-                signtool_args: Vec::new(),
+                signtool_args: None,
             },
             inf2cat_args: None,
+            stampinf_args: None,
+            infverif_args: None,
             target_platform: TargetPlatform::Universal,
         };
         let dest_root = target_dir.join(format!("{package_name}_package"));
@@ -750,7 +760,7 @@ mod tests {
             task.sign_mode,
             SignMode::Test {
                 verify_signature: false,
-                signtool_args: Vec::new(),
+                signtool_args: None,
             }
         );
         assert!(!task.sample_class);
@@ -765,10 +775,6 @@ mod tests {
         );
         assert_eq!(task.src_pdb_file_path, target_dir.join("test_package.pdb"));
         assert_eq!(
-            task.src_map_file_path,
-            target_dir.join("deps").join("test_package.map")
-        );
-        assert_eq!(
             task.src_cert_file_path,
             target_dir.join("WDRLocalTestCert.cer")
         );
@@ -779,7 +785,6 @@ mod tests {
             dest_root.join("test_package.sys")
         );
         assert_eq!(task.dest_pdb_file_path, dest_root.join("test_package.pdb"));
-        assert_eq!(task.dest_map_file_path, dest_root.join("test_package.map"));
         assert_eq!(
             task.dest_cert_file_path,
             dest_root.join("WDRLocalTestCert.cer")
@@ -808,9 +813,11 @@ mod tests {
             sample_class: false,
             sign_mode: SignMode::Test {
                 verify_signature: false,
-                signtool_args: Vec::new(),
+                signtool_args: None,
             },
             inf2cat_args: None,
+            stampinf_args: None,
+            infverif_args: None,
             target_platform: TargetPlatform::Universal,
         };
 
@@ -839,9 +846,11 @@ mod tests {
             sample_class: false,
             sign_mode: SignMode::Test {
                 verify_signature: false,
-                signtool_args: Vec::new(),
+                signtool_args: None,
             },
             inf2cat_args: None,
+            stampinf_args: None,
+            infverif_args: None,
             target_platform: TargetPlatform::Universal,
         };
 
@@ -879,9 +888,11 @@ mod tests {
                         sample_class: false,
                         sign_mode: SignMode::Test {
                             verify_signature: false,
-                            signtool_args: Vec::new(),
+                            signtool_args: None,
                         },
                         inf2cat_args: None,
+                        stampinf_args: None,
+                        infverif_args: None,
                         target_platform: TargetPlatform::Universal,
                     };
 
@@ -922,6 +933,132 @@ mod tests {
         }
     }
 
+    fn assert_stampinf_args(env_version: Option<&str>, stampinf_args: &[&str], expected: &[&str]) {
+        let working_dir = PathBuf::from("C:/abs/driver");
+        let target_dir = PathBuf::from("C:/abs/driver/target/debug");
+        let arch = CpuArchitecture::Amd64;
+
+        let params = PackageTaskParams {
+            package_name: "driver",
+            working_dir: &working_dir,
+            target_dir: &target_dir,
+            target_arch: &arch,
+            driver_model: DriverConfig::Kmdf(KmdfConfig::default()),
+            sample_class: false,
+            sign_mode: SignMode::Off,
+            inf2cat_args: None,
+            stampinf_args: Some(stampinf_args.iter().map(ToString::to_string).collect()),
+            infverif_args: None,
+            target_platform: TargetPlatform::Universal,
+        };
+
+        let wdk_build = WdkBuild::default();
+        let fs = Fs::default();
+        let mut command_exec = CommandExec::default();
+        let expected_inf_file_path = target_dir
+            .join("driver_package")
+            .join("driver.inf")
+            .to_string_lossy()
+            .into_owned();
+        let expected: Vec<String> = expected.iter().map(ToString::to_string).collect();
+        command_exec
+            .expect_run()
+            .withf(move |cmd: &str, args: &[&str], _, _| {
+                cmd == "stampinf"
+                    && args.len() >= 2
+                    && args[0] == "-f"
+                    && args[1] == expected_inf_file_path
+                    && args[2..] == expected[..]
+            })
+            .once()
+            .return_once(|_, _, _, _| {
+                Ok(Output {
+                    status: ExitStatus::default(),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        let result =
+            crate::test_utils::with_env(&[(STAMPINF_VERSION_ENV_VAR, env_version)], || {
+                let task = PackageTask::new(params, &wdk_build, &command_exec, &fs);
+                task.run_stampinf()
+            });
+        assert!(result.is_ok());
+    }
+
+    /// The `-k` value cargo-wdk derives from the default KMDF metadata.
+    fn default_kmdf_version() -> String {
+        let kmdf = KmdfConfig::default();
+        format!(
+            "{}.{}",
+            kmdf.kmdf_version_major, kmdf.target_kmdf_version_minor
+        )
+    }
+
+    #[test]
+    fn run_stampinf_appends_custom_args_after_the_defaults() {
+        assert_stampinf_args(
+            None,
+            &["/p", "Contoso Ltd", "-n"],
+            &[
+                "-d",
+                "*",
+                "-a",
+                "amd64",
+                "-c",
+                "driver.cat",
+                "-v",
+                "*",
+                "-k",
+                &default_kmdf_version(),
+                "/p",
+                "Contoso Ltd",
+                "-n",
+            ],
+        );
+    }
+
+    #[test]
+    fn run_stampinf_drops_default_date_and_version_when_caller_supplies_them() {
+        assert_stampinf_args(
+            None,
+            &["-d", "01/01/2026", "/V", "1.2.3.4"],
+            &[
+                "-a",
+                "amd64",
+                "-c",
+                "driver.cat",
+                "-k",
+                &default_kmdf_version(),
+                "-d",
+                "01/01/2026",
+                "/V",
+                "1.2.3.4",
+            ],
+        );
+    }
+
+    #[test]
+    fn run_stampinf_caller_version_wins_over_env_var() {
+        assert_stampinf_args(
+            Some("9.9.9.9"),
+            &["/v", "1.2.3.4"],
+            &[
+                "-d",
+                "*",
+                "-a",
+                "amd64",
+                "-c",
+                "driver.cat",
+                "-k",
+                &default_kmdf_version(),
+                "/v",
+                "1.2.3.4",
+            ],
+        );
+    }
+
     #[test]
     fn run_inf2cat_with_no_args_uses_arch_os_and_uselocaltime() {
         let working_dir = PathBuf::from("C:/abs/driver");
@@ -937,9 +1074,11 @@ mod tests {
             sample_class: false,
             sign_mode: SignMode::Test {
                 verify_signature: false,
-                signtool_args: Vec::new(),
+                signtool_args: None,
             },
             inf2cat_args: None,
+            stampinf_args: None,
+            infverif_args: None,
             target_platform: TargetPlatform::Universal,
         };
 
@@ -982,9 +1121,11 @@ mod tests {
             sample_class: false,
             sign_mode: SignMode::Test {
                 verify_signature: false,
-                signtool_args: Vec::new(),
+                signtool_args: None,
             },
             inf2cat_args: Some(Vec::new()),
+            stampinf_args: None,
+            infverif_args: None,
             target_platform: TargetPlatform::Universal,
         };
 
@@ -1024,12 +1165,14 @@ mod tests {
             sample_class: false,
             sign_mode: SignMode::Test {
                 verify_signature: false,
-                signtool_args: Vec::new(),
+                signtool_args: None,
             },
             inf2cat_args: Some(vec![
                 "/os:10_x64,10_CO_X64".to_string(),
                 "/verbose".to_string(),
             ]),
+            stampinf_args: None,
+            infverif_args: None,
             target_platform: TargetPlatform::Universal,
         };
 
@@ -1088,6 +1231,8 @@ mod tests {
                 sample_class: false,
                 sign_mode: SignMode::Off,
                 inf2cat_args: None,
+                stampinf_args: None,
+                infverif_args: None,
                 target_platform: TargetPlatform::Universal,
             };
             PackageTask::new(params, wdk_build, command_exec, fs)
@@ -1197,7 +1342,7 @@ mod tests {
                     "sign",
                     "/f",
                     "cert.pfx",
-                    "/P",
+                    "-P",
                     "secret",
                     "/fd",
                     "SHA256",
@@ -1215,7 +1360,7 @@ mod tests {
             let signtool_args = [
                 "/f".to_string(),
                 "cert.pfx".to_string(),
-                "/P".to_string(),
+                "-P".to_string(),
                 "secret".to_string(),
                 "/fd".to_string(),
                 "SHA256".to_string(),
@@ -1241,6 +1386,42 @@ mod tests {
             let signtool_args = ["/f".to_string(), "cert.pfx".to_string(), "/p".to_string()];
             task.run_signtool_sign(Path::new("C:/pkg/driver.sys"), &signtool_args)
                 .expect("signing should succeed");
+        }
+
+        #[test]
+        fn sign_and_verify_with_empty_custom_args_skips_defaults() {
+            let arch = CpuArchitecture::Amd64;
+            let mut command_exec = CommandExec::default();
+            for file_name in ["driver.sys", "driver.cat"] {
+                command_exec
+                    .expect_run_with_redaction()
+                    .withf(move |command, args, redaction_indices, _env, _cwd| {
+                        command == "signtool"
+                            && args.len() == 2
+                            && args[0] == "sign"
+                            && Path::new(args[1]).ends_with(file_name)
+                            && redaction_indices.is_empty()
+                    })
+                    .once()
+                    .returning(|_, _, _, _, _| {
+                        Ok(Output {
+                            status: ExitStatus::default(),
+                            stdout: vec![],
+                            stderr: vec![],
+                        })
+                    });
+            }
+
+            let wdk_build = WdkBuild::default();
+            let fs = Fs::default();
+            let mut task = create_package_task(&wdk_build, &command_exec, &fs, &arch);
+            task.sign_mode = SignMode::Test {
+                verify_signature: false,
+                signtool_args: Some(Vec::new()),
+            };
+
+            task.sign_and_verify()
+                .expect("empty custom arguments should be forwarded without defaults");
         }
 
         #[test]
@@ -1275,16 +1456,18 @@ mod tests {
                 sample_class: false,
                 sign_mode: SignMode::Test {
                     verify_signature: false,
-                    signtool_args: vec![
+                    signtool_args: Some(vec![
                         "/s".to_string(),
                         "MyStore".to_string(),
                         "/n".to_string(),
                         "MyCert".to_string(),
                         "/fd".to_string(),
                         "SHA256".to_string(),
-                    ],
+                    ]),
                 },
                 inf2cat_args: None,
+                stampinf_args: None,
+                infverif_args: None,
                 target_platform: TargetPlatform::Universal,
             };
             let task = PackageTask::new(params, &wdk_build, &command_exec, &fs);
@@ -1312,6 +1495,8 @@ mod tests {
             sample_class: false,
             sign_mode: SignMode::Off,
             inf2cat_args: None,
+            stampinf_args: None,
+            infverif_args: None,
             target_platform,
         };
 
@@ -1372,6 +1557,64 @@ mod tests {
             TargetPlatform::Windows,
             "/w",
         );
+    }
+
+    #[test]
+    fn run_infverif_with_custom_args_forwards_them_verbatim() {
+        let working_dir = PathBuf::from("C:/abs/driver");
+        let target_dir = PathBuf::from("C:/abs/driver/target/debug");
+        let arch = CpuArchitecture::Amd64;
+
+        let params = PackageTaskParams {
+            package_name: "driver",
+            working_dir: &working_dir,
+            target_dir: &target_dir,
+            target_arch: &arch,
+            driver_model: DriverConfig::Kmdf(KmdfConfig::default()),
+            sample_class: true,
+            sign_mode: SignMode::Off,
+            inf2cat_args: None,
+            stampinf_args: None,
+            infverif_args: Some(vec![
+                "/rulever".to_string(),
+                "10.0.22621".to_string(),
+                "/info".to_string(),
+            ]),
+            target_platform: TargetPlatform::Universal,
+        };
+
+        let fs = Fs::default();
+        let mut wdk_build = WdkBuild::default();
+        wdk_build
+            .expect_detect_wdk_build_number()
+            .once()
+            .returning(|| Ok(26101));
+
+        let expected_args_before_inf = ["/v", "/u", "/samples", "/rulever", "10.0.22621", "/info"];
+        let expected_inf_path = target_dir
+            .join("driver_package")
+            .join("driver.inf")
+            .to_string_lossy()
+            .to_string();
+        let mut command_exec = CommandExec::default();
+        command_exec
+            .expect_run()
+            .withf(move |cmd: &str, args: &[&str], _, _| {
+                cmd == "infverif"
+                    && args[..args.len() - 1] == expected_args_before_inf
+                    && args[args.len() - 1] == expected_inf_path
+            })
+            .once()
+            .returning(|_, _, _, _| {
+                Ok(Output {
+                    status: ExitStatus::default(),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        let task = PackageTask::new(params, &wdk_build, &command_exec, &fs);
+        assert!(task.run_infverif().is_ok());
     }
 
     mod named_mutex {
