@@ -1,9 +1,50 @@
 // Copyright (c) Microsoft Corporation
 // License: MIT OR Apache-2.0
 
-//! Execution-context primitives for native file-system drivers.
+//! Native file-system driver execution, IRP completion, and borrowed FCB APIs.
+//!
+//! The driver owns kernel storage, publication, cancellation, and shutdown.
+//! These APIs do not allocate, queue IRPs, or own cache maps or oplocks.
 
-use core::marker::PhantomData;
+use core::{fmt, marker::PhantomData, ptr::NonNull};
+
+pub use self::{
+    fcb::FcbHeader,
+    irp::{CompletionStatus, DispatchIrp, InvalidCompletionStatus, InvalidDispatchIrp},
+    resource::{ResourceAcquireError, ResourceRef},
+};
+
+mod fcb;
+mod irp;
+mod resource;
+
+/// A pointer cannot be admitted as an aligned, non-null kernel object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvalidPointer {
+    /// No object was supplied.
+    Null,
+    /// The address does not satisfy the object's alignment.
+    Misaligned,
+}
+
+impl fmt::Display for InvalidPointer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Null => "null kernel-object pointer",
+            Self::Misaligned => "misaligned kernel-object pointer",
+        })
+    }
+}
+
+impl core::error::Error for InvalidPointer {}
+
+fn checked_pointer<T>(pointer: *mut T) -> Result<NonNull<T>, InvalidPointer> {
+    let pointer = NonNull::new(pointer).ok_or(InvalidPointer::Null)?;
+    if !pointer.as_ptr().is_aligned() {
+        return Err(InvalidPointer::Misaligned);
+    }
+    Ok(pointer)
+}
 
 /// A same-thread guard for a file-system critical region.
 ///

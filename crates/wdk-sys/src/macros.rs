@@ -6,8 +6,11 @@
 //! generate with [bindgen](https://docs.rs/bindgen/latest/bindgen/).
 
 #[cfg(any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF"))]
-#[allow(missing_docs)]
-pub(crate) mod ntifs {
+#[allow(
+    missing_docs,
+    reason = "generated exports are documented at the public ntddk boundary"
+)]
+pub mod ntifs {
     #[allow(
         clippy::wildcard_imports,
         reason = "bindgen emits the checked-in C export signatures against the shared WDK type \

@@ -6,7 +6,17 @@
 #[path = "native-fsd-support.rs"]
 mod support;
 
-use wdk::file_system::CriticalRegionGuard;
+use wdk::file_system::{
+    CompletionStatus,
+    CriticalRegionGuard,
+    DispatchIrp,
+    FcbHeader,
+    InvalidCompletionStatus,
+    InvalidDispatchIrp,
+    InvalidPointer,
+    ResourceAcquireError,
+    ResourceRef,
+};
 use wdk_sys::{
     BOOLEAN,
     CCHAR,
@@ -110,14 +120,9 @@ fn stack_copy_and_completion_registration() {
         CurrentLocation: 2,
         ..IRP::default()
     };
-    // SAFETY: The initialized overlay describes the live stack array.
-    unsafe {
-        irp.Tail
-            .Overlay
-            .__bindgen_anon_2
-            .__bindgen_anon_1
-            .CurrentStackLocation = stack.as_mut_ptr().add(1)
-    };
+    // SAFETY: Index 1 is inside the live stack array.
+    let current = unsafe { stack.as_mut_ptr().add(1) };
+    set_stack(&mut irp, current);
     // SAFETY: Both current and next stack locations are valid.
     unsafe { ntddk::IoCopyCurrentIrpStackLocationToNext(&mut irp) };
     assert_eq!(
@@ -149,9 +154,9 @@ fn stack_copy_and_completion_registration() {
             stack[0].CompletionRoutine.unwrap(),
             support::completion as unsafe extern "C" fn(_, _, _) -> _
         ));
-        let expected = u32::from(success) * SL_INVOKE_ON_SUCCESS
-            | u32::from(error) * SL_INVOKE_ON_ERROR
-            | u32::from(cancel) * SL_INVOKE_ON_CANCEL;
+        let expected = (u32::from(success) * SL_INVOKE_ON_SUCCESS)
+            | (u32::from(error) * SL_INVOKE_ON_ERROR)
+            | (u32::from(cancel) * SL_INVOKE_ON_CANCEL);
         assert_eq!(u32::from(stack[0].Control), expected);
     }
     // SAFETY: This unpended IRP has room for the skip operation.
@@ -307,3 +312,265 @@ struct ImplementsSync;
 impl<T: ?Sized + Sync> AmbiguousIfSync<ImplementsSync> for T {}
 
 const _: fn() = <CriticalRegionGuard as AmbiguousIfSync<_>>::marker;
+
+const _: unsafe fn(PIRP) -> Result<DispatchIrp, InvalidDispatchIrp> = DispatchIrp::from_raw;
+const _: unsafe fn(DispatchIrp, CompletionStatus, wdk_sys::ULONG_PTR, CCHAR) -> NTSTATUS =
+    DispatchIrp::complete;
+const _: fn(&DispatchIrp) -> &wdk_sys::IO_STACK_LOCATION = DispatchIrp::current_stack;
+const _: unsafe fn(wdk_sys::PERESOURCE) -> Result<ResourceRef<'static>, InvalidPointer> =
+    ResourceRef::from_raw;
+const _: unsafe fn(FcbHeader<'static>) = FcbHeader::teardown;
+
+fn set_stack(irp: &mut wdk_sys::IRP, stack: PIO_STACK_LOCATION) {
+    // SAFETY: The test initializes the overlay arm of this fixture IRP.
+    let overlay = unsafe { &mut irp.Tail.Overlay };
+    let location = &mut overlay.__bindgen_anon_2.__bindgen_anon_1;
+    location.CurrentStackLocation = stack;
+}
+
+#[test]
+fn dispatch_completion_publishes_values_and_returns_saved_status() {
+    use wdk_sys::{IO_STACK_LOCATION, IRP, STATUS_SUCCESS, STATUS_UNSUCCESSFUL};
+    for status in [STATUS_SUCCESS, STATUS_UNSUCCESSFUL] {
+        let mut stack = IO_STACK_LOCATION {
+            MajorFunction: 3,
+            ..IO_STACK_LOCATION::default()
+        };
+        let mut irp = IRP {
+            StackCount: 1,
+            CurrentLocation: 1,
+            ..IRP::default()
+        };
+        set_stack(&mut irp, &mut stack);
+        // SAFETY: This exclusive fixture has initialized, live IRP and stack
+        // storage.
+        let dispatch = unsafe { DispatchIrp::from_raw(&mut irp) }.unwrap();
+        assert_eq!(dispatch.current_stack().MajorFunction, 3);
+        let status = CompletionStatus::try_from(status).unwrap();
+        // SAFETY: The observer accepts this request's final values at simulated
+        // passive level.
+        let returned = unsafe { dispatch.complete(status, 4096, 0) };
+        assert_eq!(returned, NTSTATUS::from(status));
+        assert_eq!(support::take_completion(), Some((returned, 4096, 0)));
+        assert_eq!(support::take_events(), ["complete"]);
+    }
+}
+
+#[test]
+fn dispatch_admission_checks_status_and_pointer_boundaries() {
+    use wdk_sys::{IO_STACK_LOCATION, IRP, STATUS_MORE_PROCESSING_REQUIRED, STATUS_PENDING};
+    assert_eq!(
+        CompletionStatus::try_from(STATUS_PENDING),
+        Err(InvalidCompletionStatus::Pending)
+    );
+    assert_eq!(
+        CompletionStatus::try_from(STATUS_MORE_PROCESSING_REQUIRED),
+        Err(InvalidCompletionStatus::MoreProcessingRequired)
+    );
+    // SAFETY: Null is rejected before accessing storage.
+    assert!(matches!(
+        unsafe { DispatchIrp::from_raw(core::ptr::null_mut()) },
+        Err(InvalidDispatchIrp::Pointer(InvalidPointer::Null))
+    ));
+    let mut irp = IRP::default();
+    let misaligned = core::ptr::from_mut(&mut irp)
+        .cast::<u8>()
+        .wrapping_add(1)
+        .cast();
+    // SAFETY: Misalignment is rejected before accessing storage.
+    assert!(matches!(
+        unsafe { DispatchIrp::from_raw(misaligned) },
+        Err(InvalidDispatchIrp::Pointer(InvalidPointer::Misaligned))
+    ));
+    for location in [0, 2] {
+        irp.StackCount = 1;
+        irp.CurrentLocation = location;
+        // SAFETY: The initialized IRP has no admissible current stack.
+        assert!(matches!(
+            unsafe { DispatchIrp::from_raw(&mut irp) },
+            Err(InvalidDispatchIrp::NoCurrentStack)
+        ));
+    }
+    irp.CurrentLocation = 1;
+    set_stack(&mut irp, core::ptr::null_mut());
+    // SAFETY: Null stack storage is rejected before dereference.
+    assert!(matches!(
+        unsafe { DispatchIrp::from_raw(&mut irp) },
+        Err(InvalidDispatchIrp::StackPointer(InvalidPointer::Null))
+    ));
+    let mut stack = IO_STACK_LOCATION::default();
+    set_stack(
+        &mut irp,
+        core::ptr::from_mut(&mut stack)
+            .cast::<u8>()
+            .wrapping_add(1)
+            .cast(),
+    );
+    // SAFETY: Misaligned stack storage is rejected before dereference.
+    assert!(matches!(
+        unsafe { DispatchIrp::from_raw(&mut irp) },
+        Err(InvalidDispatchIrp::StackPointer(InvalidPointer::Misaligned))
+    ));
+}
+
+#[test]
+fn resource_scopes_release_before_restoring_apcs() {
+    let mut storage = wdk_sys::ERESOURCE::default();
+    // SAFETY: The ABI observer models initialized, stationary storage for this
+    // scope.
+    let resource = unsafe { ResourceRef::from_raw(&mut storage) }.unwrap();
+    support::grant_access(true);
+    let body = || {
+        support::record("body");
+        7
+    };
+    // SAFETY: The observer and callback preserve this thread and simulated
+    // passive IRQL.
+    assert_eq!(unsafe { resource.with_shared(body) }, Ok(7));
+    assert_eq!(
+        support::take_events(),
+        ["enter", "shared-wait", "body", "release", "leave"]
+    );
+    // SAFETY: The observer and callback preserve this thread and simulated
+    // passive IRQL.
+    assert_eq!(unsafe { resource.with_exclusive(body) }, Ok(7));
+    assert_eq!(
+        support::take_events(),
+        ["enter", "exclusive-wait", "body", "release", "leave"]
+    );
+    // SAFETY: The observer and callback preserve this thread and simulated
+    // passive IRQL.
+    assert_eq!(unsafe { resource.try_with_shared(body) }, Ok(7));
+    assert_eq!(
+        support::take_events(),
+        ["enter", "shared-try", "body", "release", "leave"]
+    );
+    // SAFETY: The observer and callback preserve this thread and simulated
+    // passive IRQL.
+    assert_eq!(unsafe { resource.try_with_exclusive(body) }, Ok(7));
+    assert_eq!(
+        support::take_events(),
+        ["enter", "exclusive-try", "body", "release", "leave"]
+    );
+    support::grant_access(false);
+    // SAFETY: Failed acquisition does not invoke the callback.
+    assert_eq!(
+        unsafe { resource.try_with_shared(body) },
+        Err(ResourceAcquireError)
+    );
+    assert_eq!(support::take_events(), ["enter", "shared-try", "leave"]);
+    // SAFETY: Failed acquisition does not invoke the callback.
+    assert_eq!(
+        unsafe { resource.try_with_exclusive(body) },
+        Err(ResourceAcquireError)
+    );
+    assert_eq!(support::take_events(), ["enter", "exclusive-try", "leave"]);
+    support::grant_access(true);
+    // SAFETY: This callback returns an error without changing the execution
+    // context.
+    assert_eq!(
+        unsafe { resource.with_shared(|| Err::<(), _>(9)) },
+        Ok(Err(9))
+    );
+    assert_eq!(
+        support::take_events(),
+        ["enter", "shared-wait", "release", "leave"]
+    );
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: Host unwinding preserves this thread; the private guard
+        // performs cleanup.
+        unsafe { resource.with_exclusive(|| panic!("callback unwinds")) }
+    }));
+    assert!(panic.is_err());
+    assert_eq!(
+        support::take_events(),
+        ["enter", "exclusive-wait", "release", "leave"]
+    );
+    // SAFETY: Null is rejected before storage access.
+    assert!(matches!(
+        unsafe { ResourceRef::from_raw(core::ptr::null_mut()) },
+        Err(InvalidPointer::Null)
+    ));
+    let misaligned = core::ptr::from_mut(&mut storage)
+        .cast::<u8>()
+        .wrapping_add(1)
+        .cast();
+    // SAFETY: Misalignment is rejected before storage access.
+    assert!(matches!(
+        unsafe { ResourceRef::from_raw(misaligned) },
+        Err(InvalidPointer::Misaligned)
+    ));
+}
+
+#[test]
+fn borrowed_fcb_initializes_and_tears_down_driver_storage() {
+    use core::pin::Pin;
+
+    use wdk_sys::{FAST_MUTEX, FILE_OBJECT, FSRTL_ADVANCED_FCB_HEADER, ntddk};
+    for supports_file in [false, true] {
+        let mut header = FSRTL_ADVANCED_FCB_HEADER::default();
+        let address = core::ptr::from_mut(&mut header);
+        let mut mutex = FAST_MUTEX::default();
+        let mutex_address = core::ptr::from_mut(&mut mutex);
+        // SAFETY: The production macro initializes the fixture's stationary
+        // mutex.
+        unsafe { ntddk::ExInitializeFastMutex(&mut mutex) };
+        let mut slot = core::ptr::null_mut();
+        let slot_address = core::ptr::from_mut(&mut slot);
+        let slot_pin = if supports_file {
+            Some(Pin::new(&mut slot))
+        } else {
+            None
+        };
+        // SAFETY: Driver-owned fixture storage remains stationary until
+        // explicit teardown.
+        let fcb =
+            unsafe { FcbHeader::initialize(Pin::new(&mut header), Pin::new(&mut mutex), slot_pin) };
+        assert_eq!(fcb.as_ptr(), address);
+        let common = fcb.as_common_ptr();
+        // SAFETY: The C layout assertions establish the common header prefix.
+        unsafe { (*common).NodeTypeCode = 0x1234 };
+        // SAFETY: The view owns live header storage and the test serializes all
+        // access.
+        let initialized = unsafe { &*fcb.as_ptr() };
+        assert_eq!(initialized.FastMutex, mutex_address);
+        assert_eq!(
+            initialized.FileContextSupportPointer,
+            if supports_file {
+                slot_address
+            } else {
+                core::ptr::null_mut()
+            }
+        );
+        let list = core::ptr::addr_of!(initialized.FilterContexts).cast_mut();
+        assert_eq!(
+            (
+                initialized.FilterContexts.Flink,
+                initialized.FilterContexts.Blink
+            ),
+            (list, list)
+        );
+        let mut file = FILE_OBJECT {
+            FsContext: fcb.as_ptr().cast(),
+            ..FILE_OBJECT::default()
+        };
+        // SAFETY: The file object borrows the initialized FCB until teardown.
+        assert_ne!(
+            unsafe { ntddk::FsRtlSupportsPerStreamContexts(&mut file) },
+            0
+        );
+        // SAFETY: The file object borrows the initialized FCB until teardown.
+        assert_eq!(
+            unsafe { ntddk::FsRtlSupportsPerFileContexts(&mut file) } != 0,
+            supports_file
+        );
+        file.FsContext = core::ptr::null_mut();
+        assert!(file.FsContext.is_null());
+        // SAFETY: The file reference was cleared and no context or cache users
+        // remain.
+        unsafe { fcb.teardown() };
+        assert_eq!(support::take_teardown(), address);
+        assert_eq!(support::take_events(), ["teardown"]);
+        assert_eq!(header.FastMutex, mutex_address);
+    }
+}

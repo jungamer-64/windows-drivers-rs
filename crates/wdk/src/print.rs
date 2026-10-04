@@ -87,9 +87,8 @@ macro_rules! println {
 
 /// Prints and returns the value of a given expression for quick and dirty
 /// debugging.
-/// This is the no_std equivalent of the std library's dbg! macro.
-/// Instead of writing to stderr it routes output through the debugger using
-/// the println! macro in wdk.
+///
+/// Routes output to the debugger through [`println!`].
 #[cfg_attr(
     any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF"),
     doc = r"

@@ -3,13 +3,15 @@
 
 //! ABI observers for calls made by the production header exports.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use wdk_sys::{
     CCHAR,
     EVENT_TYPE,
     NTSTATUS,
     PDEVICE_OBJECT,
+    PERESOURCE,
+    PFSRTL_ADVANCED_FCB_HEADER,
     PIRP,
     PKEVENT,
     PVOID,
@@ -21,6 +23,47 @@ use wdk_sys::{
 thread_local! {
     static EVENTS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
     static COMPLETED: RefCell<Option<(NTSTATUS, ULONG_PTR, CCHAR)>> = const { RefCell::new(None) };
+    static GRANT_ACCESS: Cell<bool> = const { Cell::new(true) };
+    static TORN_DOWN: Cell<PFSRTL_ADVANCED_FCB_HEADER> = const { Cell::new(core::ptr::null_mut()) };
+}
+
+pub fn grant_access(grant: bool) {
+    GRANT_ACCESS.with(|access| access.set(grant));
+}
+pub fn take_teardown() -> PFSRTL_ADVANCED_FCB_HEADER {
+    TORN_DOWN.with(|header| header.replace(core::ptr::null_mut()))
+}
+
+// SAFETY: The test binary supplies the exact generated kernel ABI.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn ExAcquireResourceSharedLite(_: PERESOURCE, wait: u8) -> u8 {
+    record(if wait == 0 {
+        "shared-try"
+    } else {
+        "shared-wait"
+    });
+    GRANT_ACCESS.with(|access| u8::from(access.get()))
+}
+// SAFETY: The test binary supplies the exact generated kernel ABI.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn ExAcquireResourceExclusiveLite(_: PERESOURCE, wait: u8) -> u8 {
+    record(if wait == 0 {
+        "exclusive-try"
+    } else {
+        "exclusive-wait"
+    });
+    GRANT_ACCESS.with(|access| u8::from(access.get()))
+}
+// SAFETY: The test binary supplies the exact generated kernel ABI.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn ExReleaseResourceLite(_: PERESOURCE) {
+    record("release");
+}
+// SAFETY: The test binary supplies the exact generated kernel ABI.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn FsRtlTeardownPerStreamContexts(header: PFSRTL_ADVANCED_FCB_HEADER) {
+    TORN_DOWN.with(|torn_down| torn_down.set(header));
+    record("teardown");
 }
 
 pub fn take_events() -> Vec<&'static str> {
@@ -81,7 +124,6 @@ pub unsafe extern "C" fn free_context(_: PVOID) {}
 unsafe extern "C" fn initialize_event(event: PKEVENT, kind: EVENT_TYPE, state: u8) {
     // SAFETY: The kernel caller supplies live event storage to initialize.
     let event = unsafe { &mut *event };
-    // SAFETY: ExInitializeFastMutex supplies writable event storage.
     event.Header.SignalState = i32::from(state);
     event.Header.__bindgen_anon_1.__bindgen_anon_2.Type = u8::try_from(kind).unwrap();
 }
