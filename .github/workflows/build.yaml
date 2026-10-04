@@ -105,6 +105,9 @@ jobs:
       - name: Build Tests (via Cargo Make)
         run: cargo make --cwd ./tests build +${{ matrix.rust_toolchain }} --locked --profile ${{ matrix.cargo_profile }} --target ${{ matrix.target_triple.name }}
 
+      - name: Link Native FSD APIs to Kernel Libraries
+        run: cargo +${{ matrix.rust_toolchain }} build --locked --manifest-path tests/native-fsd-driver/Cargo.toml --profile ${{ matrix.cargo_profile }} --target ${{ matrix.target_triple.name }}
+
       - name: Package Tests (via Cargo Make)
         run: cargo make --cwd ./tests package-driver-flow +${{ matrix.rust_toolchain }} --locked --profile ${{ matrix.cargo_profile }} --target ${{ matrix.target_triple.name }}
 

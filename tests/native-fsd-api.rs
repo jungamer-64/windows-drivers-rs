@@ -331,7 +331,7 @@ fn set_stack(irp: &mut wdk_sys::IRP, stack: PIO_STACK_LOCATION) {
 #[test]
 fn dispatch_completion_publishes_values_and_returns_saved_status() {
     use wdk_sys::{IO_STACK_LOCATION, IRP, STATUS_SUCCESS, STATUS_UNSUCCESSFUL};
-    for status in [STATUS_SUCCESS, STATUS_UNSUCCESSFUL] {
+    for raw_status in [STATUS_SUCCESS, STATUS_UNSUCCESSFUL] {
         let mut stack = IO_STACK_LOCATION {
             MajorFunction: 3,
             ..IO_STACK_LOCATION::default()
@@ -346,12 +346,12 @@ fn dispatch_completion_publishes_values_and_returns_saved_status() {
         // storage.
         let dispatch = unsafe { DispatchIrp::from_raw(&mut irp) }.unwrap();
         assert_eq!(dispatch.current_stack().MajorFunction, 3);
-        let status = CompletionStatus::try_from(status).unwrap();
+        let status = CompletionStatus::try_from(raw_status).unwrap();
         // SAFETY: The observer accepts this request's final values at simulated
         // passive level.
         let returned = unsafe { dispatch.complete(status, 4096, 0) };
-        assert_eq!(returned, NTSTATUS::from(status));
-        assert_eq!(support::take_completion(), Some((returned, 4096, 0)));
+        assert_eq!(returned, raw_status);
+        assert_eq!(support::take_completion(), Some((raw_status, 4096, 0)));
         assert_eq!(support::take_events(), ["complete"]);
     }
 }
@@ -506,10 +506,24 @@ fn resource_scopes_release_before_restoring_apcs() {
 fn borrowed_fcb_initializes_and_tears_down_driver_storage() {
     use core::pin::Pin;
 
-    use wdk_sys::{FAST_MUTEX, FILE_OBJECT, FSRTL_ADVANCED_FCB_HEADER, ntddk};
+    use wdk_sys::{
+        FAST_MUTEX,
+        FILE_OBJECT,
+        FSRTL_ADVANCED_FCB_HEADER,
+        FSRTL_COMMON_FCB_HEADER,
+        ntddk,
+    };
     for supports_file in [false, true] {
         let mut header = FSRTL_ADVANCED_FCB_HEADER::default();
         let address = core::ptr::from_mut(&mut header);
+        // SAFETY: The C layout assertions establish this independent fixture's
+        // common prefix, which the driver populates before initializing stream
+        // support.
+        let base = unsafe { &mut *address.cast::<FSRTL_COMMON_FCB_HEADER>() };
+        base.NodeTypeCode = 0x1234;
+        base.AllocationSize.QuadPart = 8192;
+        base.FileSize.QuadPart = 4096;
+        base.ValidDataLength.QuadPart = 2048;
         let mut mutex = FAST_MUTEX::default();
         let mutex_address = core::ptr::from_mut(&mut mutex);
         // SAFETY: The production macro initializes the fixture's stationary
@@ -528,8 +542,16 @@ fn borrowed_fcb_initializes_and_tears_down_driver_storage() {
             unsafe { FcbHeader::initialize(Pin::new(&mut header), Pin::new(&mut mutex), slot_pin) };
         assert_eq!(fcb.as_ptr(), address);
         let common = fcb.as_common_ptr();
-        // SAFETY: The C layout assertions establish the common header prefix.
-        unsafe { (*common).NodeTypeCode = 0x1234 };
+        assert_eq!(common.cast::<()>(), address.cast::<()>());
+        // SAFETY: The initialized header remains live and access is serialized.
+        let base = unsafe { &*common };
+        assert_eq!(base.NodeTypeCode, 0x1234);
+        // SAFETY: The driver initialized the QuadPart arm before stream setup.
+        assert_eq!(unsafe { base.AllocationSize.QuadPart }, 8192);
+        // SAFETY: The driver initialized the QuadPart arm before stream setup.
+        assert_eq!(unsafe { base.FileSize.QuadPart }, 4096);
+        // SAFETY: The driver initialized the QuadPart arm before stream setup.
+        assert_eq!(unsafe { base.ValidDataLength.QuadPart }, 2048);
         // SAFETY: The view owns live header storage and the test serializes all
         // access.
         let initialized = unsafe { &*fcb.as_ptr() };

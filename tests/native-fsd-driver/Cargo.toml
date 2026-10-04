@@ -1,0 +1,40 @@
+
+[package]
+description = "Kernel-link fixture for native file-system driver APIs"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+name = "native-fsd-driver"
+publish = false
+version = "0.0.0"
+
+[package.metadata.wdk.driver-model]
+driver-type = "WDM"
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+test = false
+
+[build-dependencies]
+wdk-build.path = "../../crates/wdk-build"
+
+[dependencies]
+wdk.path = "../../crates/wdk"
+wdk-panic.path = "../../crates/wdk-panic"
+wdk-sys.path = "../../crates/wdk-sys"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+lto = true
+panic = "abort"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+multiple_unsafe_ops_per_block = "forbid"
+undocumented_unsafe_blocks = "forbid"
+unnecessary_safety_doc = "forbid"

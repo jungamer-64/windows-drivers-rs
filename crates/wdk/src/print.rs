@@ -45,7 +45,7 @@ macro_rules! print {
 
 /// Prints to the debugger, with a newline.
 ///
-/// This macro uses the same syntax as [`core::format!`], but writes to the
+/// This macro uses the same syntax as [`core::format_args!`], but writes to the
 /// debugger instead. See [`core::fmt`] for more information.
 #[cfg_attr(
     any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF"),

@@ -90,7 +90,7 @@ impl core::error::Error for InvalidDispatchIrp {}
 /// Exclusive synchronous processing and completion authority for an incoming
 /// IRP.
 ///
-/// This thread-affine value is neither clonable nor shareable. Completion
+/// This thread-affine value is neither cloneable nor shareable. Completion
 /// consumes it. Dropping it does not complete or free the IRP: the dispatch
 /// owner remains responsible for an unfinished request. It cannot be used for
 /// driver-allocated IRPs, queued requests, or requests already sent down-stack.
@@ -113,10 +113,10 @@ impl DispatchIrp {
     /// IRP. If its current-stack address is non-null and aligned, that address
     /// must designate live, initialized stack storage. The caller must
     /// exclusively own processing and completion, with no racing cancel
-    /// routine or lower driver. Storage must be accessible at the current
-    /// IRQL. Until completion or drop, no other path may complete, free,
-    /// queue, or mutate the IRP/stack. After completion the caller must not
-    /// use any original pointer or alias.
+    /// routine or lower driver. IRP and stack storage must remain resident in
+    /// nonpaged memory. Until completion or drop, no other path may complete,
+    /// free, queue, or mutate the IRP/stack. After completion the caller
+    /// must not use any original pointer or alias.
     pub unsafe fn from_raw(irp: PIRP) -> Result<Self, InvalidDispatchIrp> {
         let irp = checked_pointer(irp).map_err(InvalidDispatchIrp::Pointer)?;
         // SAFETY: The caller supplies a live, initialized, exclusively owned
