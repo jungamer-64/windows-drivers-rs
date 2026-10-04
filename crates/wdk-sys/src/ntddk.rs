@@ -9,6 +9,14 @@
 
 pub use bindings::*;
 
+/// Returns the cache manager's file-size field. The file must have a live
+/// shared cache map; the pointer is borrowed and grants no synchronization.
+pub use crate::macros::ntifs::wdk_sys_CcGetFileSizePointer as CcGetFileSizePointer;
+/// Tests whether the file's stream has a shared cache map, including a map
+/// established through another file object for the same stream.
+pub use crate::macros::ntifs::wdk_sys_CcIsFileCached as CcIsFileCached;
+/// Initializes a caller-owned, aligned fast mutex in nonpaged memory.
+pub use crate::macros::ntifs::wdk_sys_ExInitializeFastMutex as ExInitializeFastMutex;
 /// Reports whether a file-lock structure currently contains locks.
 pub use crate::macros::ntifs::wdk_sys_FsRtlAreThereCurrentFileLocks as FsRtlAreThereCurrentFileLocks;
 /// Disables delivery of normal kernel APCs for the current thread.
@@ -21,14 +29,40 @@ pub use crate::macros::ntifs::wdk_sys_FsRtlEnterFileSystem as FsRtlEnterFileSyst
 /// Re-enables normal kernel APC delivery for a matching
 /// [`FsRtlEnterFileSystem`] call.
 pub use crate::macros::ntifs::wdk_sys_FsRtlExitFileSystem as FsRtlExitFileSystem;
+/// Returns the per-file context slot, or null when file contexts are
+/// unsupported. The returned slot remains owned by the file system.
+pub use crate::macros::ntifs::wdk_sys_FsRtlGetPerFileContextPointer as FsRtlGetPerFileContextPointer;
+/// Returns the advanced FCB header referenced by a file object's `FsContext`.
+pub use crate::macros::ntifs::wdk_sys_FsRtlGetPerStreamContextPointer as FsRtlGetPerStreamContextPointer;
+/// Initializes per-file context identity and its mandatory free callback.
+/// The context must not already be linked. Its storage and callback must remain
+/// valid until removal or teardown; the callback must follow WDK reentrancy
+/// rules.
+pub use crate::macros::ntifs::wdk_sys_FsRtlInitPerFileContext as FsRtlInitPerFileContext;
+/// Initializes per-stream context identity and its mandatory free callback.
+/// The context must not already be linked. Its storage and callback must remain
+/// valid until removal or teardown; the callback must follow WDK reentrancy
+/// rules.
+pub use crate::macros::ntifs::wdk_sys_FsRtlInitPerStreamContext as FsRtlInitPerStreamContext;
 /// Initializes an advanced FCB header, optional file-context storage, and
 /// optional auto-expand push lock according to the `ntifs.h` macro contract.
 pub use crate::macros::ntifs::wdk_sys_FsRtlSetupAdvancedHeaderEx2 as FsRtlSetupAdvancedHeaderEx2;
+/// Tests whether the file's advanced FCB header supports per-file contexts.
+pub use crate::macros::ntifs::wdk_sys_FsRtlSupportsPerFileContexts as FsRtlSupportsPerFileContexts;
+/// Tests whether the file's advanced FCB header supports per-stream contexts.
+pub use crate::macros::ntifs::wdk_sys_FsRtlSupportsPerStreamContexts as FsRtlSupportsPerStreamContexts;
+/// Transfers an IRP to a lower driver after its stack location is prepared.
+/// Completion can occur before this call returns. A returned error does not
+/// return ownership of the IRP to the caller.
+pub use crate::macros::ntifs::wdk_sys_IoCallDriver as IoCallDriver;
 /// Completes an IRP and applies the specified priority boost to the initiating
 /// thread.
 ///
 /// This is the callable form of the WDK `IoCompleteRequest` macro.
 pub use crate::macros::ntifs::wdk_sys_IoCompleteRequest as IoCompleteRequest;
+/// Copies the current stack parameters to the next location and clears its
+/// control flags. Use this before registering a completion routine.
+pub use crate::macros::ntifs::wdk_sys_IoCopyCurrentIrpStackLocationToNext as IoCopyCurrentIrpStackLocationToNext;
 /// Returns the current I/O stack location of an IRP.
 ///
 /// This is the callable form of the WDK `IoGetCurrentIrpStackLocation` inline
@@ -53,6 +87,16 @@ pub use crate::macros::ntifs::wdk_sys_IoMarkIrpPending as IoMarkIrpPending;
 /// must follow the cancel spin-lock and cancellation-state protocol described
 /// by the [WDK contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetcancelroutine).
 pub use crate::macros::ntifs::wdk_sys_IoSetCancelRoutine as IoSetCancelRoutine;
+/// Registers a completion routine in the next stack location. The callback and
+/// its nonpaged context must remain valid until completion, including driver
+/// unload. Use `IoSetCompletionRoutineEx` when unload protection is required.
+pub use crate::macros::ntifs::wdk_sys_IoSetCompletionRoutine as IoSetCompletionRoutine;
+/// Advances the IRP to its next stack location. The IRP must have that
+/// location.
+pub use crate::macros::ntifs::wdk_sys_IoSetNextIrpStackLocation as IoSetNextIrpStackLocation;
+/// Reuses the current stack location when passing an unpended IRP down without
+/// registering a completion routine. Do not modify that shared stack location.
+pub use crate::macros::ntifs::wdk_sys_IoSkipCurrentIrpStackLocation as IoSkipCurrentIrpStackLocation;
 
 #[allow(missing_docs)]
 #[allow(clippy::derive_partial_eq_without_eq)]

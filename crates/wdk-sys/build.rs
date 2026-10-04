@@ -708,10 +708,6 @@ fn start_ntifs_export_task<'scope>(
                     for (key, value) in config.preprocessor_definitions() {
                         cc_builder.define(&key, value.as_deref());
                     }
-                    if cfg!(feature = "test-stubs") {
-                        cc_builder.define("WDK_SYS_TEST_STUBS", None);
-                    }
-
                     cc_builder
                         .includes(config.include_paths()?)
                         // Keep every header-only export independently discardable. Host-side
