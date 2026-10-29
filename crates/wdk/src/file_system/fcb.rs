@@ -3,16 +3,17 @@
 
 use core::{marker::PhantomData, pin::Pin, ptr::NonNull};
 
-use wdk_sys::{FAST_MUTEX, FSRTL_ADVANCED_FCB_HEADER, FSRTL_COMMON_FCB_HEADER, PVOID, ntddk};
+use wdk_sys::{FAST_MUTEX, FSRTL_ADVANCED_FCB_HEADER, FSRTL_COMMON_FCB_HEADER, PVOID};
 
 /// A borrowed advanced FCB header with initialized stream-context support.
 ///
 /// The header, fast mutex, and optional per-file context slot remain owned by
 /// the driver. This value ties their Rust borrows together; it does not own
-/// publication to file objects, cache maps, resources, or an auto-expand lock.
-/// Dropping or forgetting the view does not tear down the header. The driver
-/// must still finish external uses and tear down stream contexts before freeing
-/// or moving storage. Per-file context teardown belongs to the owning file.
+/// publication to file objects, cache maps or resources. Initialization owns
+/// the native auto-expand lock. Dropping or forgetting the view does not tear
+/// down the header. The driver must still finish external uses and tear down
+/// stream contexts before freeing or moving storage. Per-file context teardown
+/// belongs to the owning file.
 #[must_use = "the driver must retain header storage and explicitly tear down stream contexts"]
 pub struct FcbHeader<'a> {
     header: NonNull<FSRTL_ADVANCED_FCB_HEADER>,
@@ -24,6 +25,43 @@ pub struct FcbHeader<'a> {
 }
 
 impl<'a> FcbHeader<'a> {
+    /// Initializes stationary header/mutex storage and owns its `AePushLock`.
+    ///
+    /// # Errors
+    /// Returns the native allocation status without publishing an initialized
+    /// header.
+    ///
+    /// # Safety
+    /// Run at `APC_LEVEL` or below. Header base fields must be initialized and
+    /// have no live contexts, mappings or oplocks. Header, mutex and optional
+    /// per-file slot must remain stationary until external users stop and
+    /// teardown finishes, even if this view is dropped or forgotten. Mutex and
+    /// paging-file headers must be nonpaged. Obey WDK synchronization rules.
+    pub unsafe fn initialize(
+        header: Pin<&'a mut FSRTL_ADVANCED_FCB_HEADER>,
+        fast_mutex: Pin<&'a mut FAST_MUTEX>,
+        file_context_slot: Option<Pin<&'a mut PVOID>>,
+        pool_tag: wdk_sys::ULONG,
+    ) -> Result<Self, wdk_sys::NTSTATUS> {
+        let header = NonNull::from(header.get_mut());
+        let mutex = core::ptr::from_mut(fast_mutex.get_mut());
+        let slot = file_context_slot.map_or(core::ptr::null_mut(), |slot| {
+            core::ptr::from_mut(slot.get_mut())
+        });
+        // SAFETY: The caller supplies stationary storage with the WDK lifetime,
+        // initialization and pool requirements; C owns allocation rollback.
+        let status = unsafe {
+            wdk_sys::file_system::initialize_fcb_header(header.as_ptr(), mutex, slot, pool_tag)
+        };
+        if status < 0 {
+            return Err(status);
+        }
+        Ok(Self {
+            header,
+            lifetime: PhantomData,
+        })
+    }
+
     /// Borrows the header's address for WDK interoperation. External users must
     /// stop before teardown; this pointer does not transfer storage ownership.
     #[must_use]
@@ -42,8 +80,8 @@ impl<'a> FcbHeader<'a> {
     }
 
     /// Tears down stream contexts after external use has stopped. This consumes
-    /// the view but does not free storage, delete executive resources, or free
-    /// a driver-supplied auto-expand push lock.
+    /// the view but frees the owned auto-expand push lock but does not free
+    /// storage or delete executive resources.
     ///
     /// # Safety
     ///
@@ -55,6 +93,6 @@ impl<'a> FcbHeader<'a> {
     pub unsafe fn teardown(self) {
         // SAFETY: Construction established stream support; the caller proves
         // external quiescence and the required teardown execution context.
-        unsafe { ntddk::FsRtlTeardownPerStreamContexts(self.header.as_ptr()) };
+        unsafe { wdk_sys::file_system::teardown_fcb_header(self.header.as_ptr()) };
     }
 }

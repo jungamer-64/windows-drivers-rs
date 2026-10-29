@@ -3,15 +3,17 @@
 
 //! Native file-system driver execution, IRP completion, and borrowed FCB APIs.
 //!
-//! The driver owns kernel storage, publication, cancellation, and shutdown.
-//! These APIs do not allocate, queue IRPs, or own cache maps or oplocks.
+//! The driver owns enclosing storage, publication, cancellation, and shutdown.
+//! Header construction owns its native auto-expand lock; resource guards own
+//! same-thread acquisitions. These APIs do not queue IRPs or own cache maps or
+//! oplocks.
 
 use core::{fmt, marker::PhantomData, ptr::NonNull};
 
 pub use self::{
     fcb::FcbHeader,
     irp::{CompletionStatus, DispatchIrp, InvalidCompletionStatus, InvalidDispatchIrp},
-    resource::{ResourceAcquireError, ResourceRef},
+    resource::{ResourceAcquireError, ResourceGuard, ResourceRef},
 };
 
 mod fcb;
@@ -87,4 +89,31 @@ impl Drop for CriticalRegionGuard {
         // require this drop to occur on that same execution thread.
         unsafe { wdk_sys::ntddk::FsRtlExitFileSystem() };
     }
+}
+
+/// Completes a prepared incoming IRP while preserving filesystem recursion
+/// context. If the current thread has no top-level IRP, upper callbacks observe
+/// this IRP. The saved thread value is restored without accessing the completed
+/// request.
+///
+/// # Safety
+/// The caller owns terminal completion, has published all status/auxiliary
+/// fields and retired cancellation, mappings and scheduling borrows. Run at
+/// `DISPATCH_LEVEL` or below without spin locks or resources required by upper
+/// callbacks. The IRP may be freed before this call returns and must never be
+/// used afterward.
+#[inline(always)]
+pub unsafe fn complete_request(irp: wdk_sys::PIRP, priority_boost: wdk_sys::CCHAR) {
+    // SAFETY: This observes only the current thread's opaque filesystem
+    // context.
+    let previous = unsafe { wdk_sys::ntddk::IoGetTopLevelIrp() };
+    if previous.is_null() {
+        // SAFETY: The caller owns this live IRP through native completion.
+        unsafe { wdk_sys::ntddk::IoSetTopLevelIrp(irp) };
+    }
+    // SAFETY: The caller grants terminal completion with the required context.
+    unsafe { wdk_sys::ntddk::IoCompleteRequest(irp, priority_boost) };
+    // SAFETY: Only the saved thread value is restored; the IRP may already be
+    // freed.
+    unsafe { wdk_sys::ntddk::IoSetTopLevelIrp(previous) };
 }

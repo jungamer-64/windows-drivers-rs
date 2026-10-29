@@ -329,31 +329,48 @@ fn set_stack(irp: &mut wdk_sys::IRP, stack: PIO_STACK_LOCATION) {
 }
 
 #[test]
-fn dispatch_completion_publishes_values_and_returns_saved_status() {
+fn dispatch_completion_preserves_recursion_and_returns_saved_status() {
     use wdk_sys::{IO_STACK_LOCATION, IRP, STATUS_SUCCESS, STATUS_UNSUCCESSFUL};
-    for raw_status in [STATUS_SUCCESS, STATUS_UNSUCCESSFUL] {
-        let mut stack = IO_STACK_LOCATION {
-            MajorFunction: 3,
-            ..IO_STACK_LOCATION::default()
-        };
-        let mut irp = IRP {
-            StackCount: 1,
-            CurrentLocation: 1,
-            ..IRP::default()
-        };
-        set_stack(&mut irp, &mut stack);
-        // SAFETY: This exclusive fixture has initialized, live IRP and stack
-        // storage.
-        let dispatch = unsafe { DispatchIrp::from_raw(&mut irp) }.unwrap();
-        assert_eq!(dispatch.current_stack().MajorFunction, 3);
-        let status = CompletionStatus::try_from(raw_status).unwrap();
-        // SAFETY: The observer accepts this request's final values at simulated
-        // passive level.
-        let returned = unsafe { dispatch.complete(status, 4096, 0) };
-        assert_eq!(returned, raw_status);
-        assert_eq!(support::take_completion(), Some((raw_status, 4096, 0)));
-        assert_eq!(support::take_events(), ["complete"]);
+    let mut previous_irp = IRP::default();
+    for previous in [
+        core::ptr::null_mut(),
+        core::ptr::from_mut(&mut previous_irp),
+    ] {
+        for raw_status in [STATUS_SUCCESS, STATUS_UNSUCCESSFUL] {
+            let mut stack = IO_STACK_LOCATION {
+                MajorFunction: 3,
+                ..IO_STACK_LOCATION::default()
+            };
+            let mut irp = IRP {
+                StackCount: 1,
+                CurrentLocation: 1,
+                ..IRP::default()
+            };
+            set_stack(&mut irp, &mut stack);
+            let irp_address = core::ptr::from_mut(&mut irp);
+            support::set_top_level(previous);
+            // SAFETY: This fixture exclusively owns live IRP and stack storage.
+            let dispatch = unsafe { DispatchIrp::from_raw(irp_address) }.unwrap();
+            assert_eq!(dispatch.current_stack().MajorFunction, 3);
+            let status = CompletionStatus::try_from(raw_status).unwrap();
+            // SAFETY: The observer accepts final values at simulated passive
+            // IRQL.
+            let returned = unsafe { dispatch.complete(status, 4096, 0) };
+            assert_eq!(returned, raw_status);
+            assert_eq!(support::take_completion(), Some((raw_status, 4096, 0)));
+            assert_eq!(
+                support::completion_context(),
+                if previous.is_null() {
+                    irp_address
+                } else {
+                    previous
+                }
+            );
+            assert_eq!(support::top_level(), previous);
+            assert_eq!(support::take_events(), ["complete"]);
+        }
     }
+    support::set_top_level(core::ptr::null_mut());
 }
 
 #[test]
@@ -414,92 +431,72 @@ fn dispatch_admission_checks_status_and_pointer_boundaries() {
 }
 
 #[test]
-fn resource_scopes_release_before_restoring_apcs() {
+fn resource_guards_preserve_apc_nesting_and_native_handoff() {
     let mut storage = wdk_sys::ERESOURCE::default();
-    // SAFETY: The ABI observer models initialized, stationary storage for this
-    // scope.
+    // SAFETY: The observer models stationary, initialized resource storage.
     let resource = unsafe { ResourceRef::from_raw(&mut storage) }.unwrap();
     support::grant_access(true);
-    let body = || {
-        support::record("body");
-        7
-    };
-    // SAFETY: The observer and callback preserve this thread and simulated
-    // passive IRQL.
-    assert_eq!(unsafe { resource.with_shared(body) }, Ok(7));
+    // SAFETY: This scope preserves simulated passive IRQL and thread.
+    let outer = unsafe { resource.acquire_shared() }.unwrap();
+    assert_eq!(support::apc_depth(), 1);
+    // SAFETY: Shared recursive acquisition is permitted on this thread.
+    let inner = unsafe { resource.try_acquire_shared() }.unwrap();
+    assert_eq!(support::apc_depth(), 2);
+    let native = inner.into_raw();
+    // SAFETY: The native protocol now owns this exact same-thread acquisition.
+    unsafe { wdk_sys::file_system::release_resource(native) };
+    assert_eq!(support::apc_depth(), 1);
+    drop(outer);
+    assert_eq!(support::apc_depth(), 0);
     assert_eq!(
         support::take_events(),
-        ["enter", "shared-wait", "body", "release", "leave"]
+        [
+            "enter",
+            "shared-wait",
+            "enter",
+            "shared-try",
+            "release",
+            "leave",
+            "release",
+            "leave"
+        ]
     );
-    // SAFETY: The observer and callback preserve this thread and simulated
-    // passive IRQL.
-    assert_eq!(unsafe { resource.with_exclusive(body) }, Ok(7));
-    assert_eq!(
-        support::take_events(),
-        ["enter", "exclusive-wait", "body", "release", "leave"]
-    );
-    // SAFETY: The observer and callback preserve this thread and simulated
-    // passive IRQL.
-    assert_eq!(unsafe { resource.try_with_shared(body) }, Ok(7));
-    assert_eq!(
-        support::take_events(),
-        ["enter", "shared-try", "body", "release", "leave"]
-    );
-    // SAFETY: The observer and callback preserve this thread and simulated
-    // passive IRQL.
-    assert_eq!(unsafe { resource.try_with_exclusive(body) }, Ok(7));
-    assert_eq!(
-        support::take_events(),
-        ["enter", "exclusive-try", "body", "release", "leave"]
-    );
-    support::grant_access(false);
-    // SAFETY: Failed acquisition does not invoke the callback.
-    assert_eq!(
-        unsafe { resource.try_with_shared(body) },
-        Err(ResourceAcquireError)
-    );
-    assert_eq!(support::take_events(), ["enter", "shared-try", "leave"]);
-    // SAFETY: Failed acquisition does not invoke the callback.
-    assert_eq!(
-        unsafe { resource.try_with_exclusive(body) },
-        Err(ResourceAcquireError)
-    );
-    assert_eq!(support::take_events(), ["enter", "exclusive-try", "leave"]);
+    for exclusive in [false, true] {
+        support::grant_access(false);
+        // SAFETY: Nonblocking acquisition preserves this thread and passive
+        // IRQL.
+        let result = if exclusive {
+            unsafe { resource.try_acquire_exclusive() }
+        } else {
+            unsafe { resource.try_acquire_shared() }
+        };
+        assert!(matches!(result, Err(ResourceAcquireError)));
+        assert_eq!(support::apc_depth(), 0);
+        assert_eq!(
+            support::take_events(),
+            [
+                "enter",
+                if exclusive {
+                    "exclusive-try"
+                } else {
+                    "shared-try"
+                },
+                "leave"
+            ]
+        );
+    }
     support::grant_access(true);
-    // SAFETY: This callback returns an error without changing the execution
-    // context.
-    assert_eq!(
-        unsafe { resource.with_shared(|| Err::<(), _>(9)) },
-        Ok(Err(9))
-    );
-    assert_eq!(
-        support::take_events(),
-        ["enter", "shared-wait", "release", "leave"]
-    );
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // SAFETY: Host unwinding preserves this thread; the private guard
-        // performs cleanup.
-        unsafe { resource.with_exclusive(|| panic!("callback unwinds")) }
+        // SAFETY: Rust host unwinding preserves the thread until guard cleanup.
+        let _guard = unsafe { resource.acquire_exclusive() }.unwrap();
+        panic!("callback unwinds");
     }));
     assert!(panic.is_err());
+    assert_eq!(support::apc_depth(), 0);
     assert_eq!(
         support::take_events(),
         ["enter", "exclusive-wait", "release", "leave"]
     );
-    // SAFETY: Null is rejected before storage access.
-    assert!(matches!(
-        unsafe { ResourceRef::from_raw(core::ptr::null_mut()) },
-        Err(InvalidPointer::Null)
-    ));
-    let misaligned = core::ptr::from_mut(&mut storage)
-        .cast::<u8>()
-        .wrapping_add(1)
-        .cast();
-    // SAFETY: Misalignment is rejected before storage access.
-    assert!(matches!(
-        unsafe { ResourceRef::from_raw(misaligned) },
-        Err(InvalidPointer::Misaligned)
-    ));
 }
 
 #[test]
@@ -538,8 +535,15 @@ fn borrowed_fcb_initializes_and_tears_down_driver_storage() {
         };
         // SAFETY: Driver-owned fixture storage remains stationary until
         // explicit teardown.
-        let fcb =
-            unsafe { FcbHeader::initialize(Pin::new(&mut header), Pin::new(&mut mutex), slot_pin) };
+        let fcb = unsafe {
+            FcbHeader::initialize(
+                Pin::new(&mut header),
+                Pin::new(&mut mutex),
+                slot_pin,
+                0x74657354,
+            )
+        }
+        .unwrap();
         assert_eq!(fcb.as_ptr(), address);
         let common = fcb.as_common_ptr();
         assert_eq!(common.cast::<()>(), address.cast::<()>());
@@ -592,7 +596,80 @@ fn borrowed_fcb_initializes_and_tears_down_driver_storage() {
         // remain.
         unsafe { fcb.teardown() };
         assert_eq!(support::take_teardown(), address);
-        assert_eq!(support::take_events(), ["teardown"]);
+        assert_eq!(
+            support::take_events(),
+            ["allocate-lock", "teardown", "free-lock"]
+        );
         assert_eq!(header.FastMutex, mutex_address);
     }
+}
+
+#[test]
+fn fcb_allocation_failure_publishes_no_header_or_cleanup_obligation() {
+    use core::pin::Pin;
+    let mut header = wdk_sys::FSRTL_ADVANCED_FCB_HEADER::default();
+    let mut mutex = wdk_sys::FAST_MUTEX::default();
+    support::allow_lock(false);
+    // SAFETY: The empty caller-owned storage is stationary and has no external
+    // users.
+    let result = unsafe {
+        FcbHeader::initialize(
+            Pin::new(&mut header),
+            Pin::new(&mut mutex),
+            None,
+            0x74657354,
+        )
+    };
+    assert!(matches!(
+        result,
+        Err(wdk_sys::STATUS_INSUFFICIENT_RESOURCES)
+    ));
+    assert_eq!(support::take_events(), ["allocate-lock"]);
+    support::allow_lock(true);
+}
+
+#[test]
+fn pending_forwarding_preserves_the_upper_pending_bit() {
+    use wdk_sys::{IO_STACK_LOCATION, IRP, SL_PENDING_RETURNED, STATUS_PENDING};
+    for lower_status in [
+        wdk_sys::STATUS_SUCCESS,
+        STATUS_PENDING,
+        wdk_sys::STATUS_UNSUCCESSFUL,
+    ] {
+        support::lower_status(lower_status);
+        for pending in [false, true] {
+            let mut stack = [IO_STACK_LOCATION::default(); 3];
+            let mut irp = IRP {
+                StackCount: 3,
+                CurrentLocation: 2,
+                ..IRP::default()
+            };
+            set_stack(&mut irp, core::ptr::from_mut(&mut stack[1]));
+            support::mutate_lower_stack(true);
+            let status = if pending {
+                // SAFETY: The live fixture stack is exclusively owned before
+                // publication.
+                unsafe { wdk_sys::ntddk::IoMarkIrpPending(&mut irp) };
+                // SAFETY: The pended fixture has a next stack and no
+                // completion/cancel callback.
+                unsafe {
+                    wdk_sys::file_system::forward_pending_irp(core::ptr::null_mut(), &mut irp)
+                }
+            } else {
+                // SAFETY: The unpended fixture has a next stack and no
+                // completion/cancel callback.
+                unsafe {
+                    wdk_sys::file_system::forward_unpended_irp(core::ptr::null_mut(), &mut irp)
+                }
+            };
+            assert_eq!(status, lower_status);
+            assert_eq!(
+                u32::from(stack[1].Control) & SL_PENDING_RETURNED != 0,
+                pending
+            );
+            support::mutate_lower_stack(false);
+            assert_eq!(support::take_events(), ["call-driver"]);
+        }
+    }
+    support::lower_status(STATUS_PENDING);
 }

@@ -142,4 +142,27 @@ impl DispatchIrp {
         unsafe { &*stack }
     }
 
+    /// Publishes final status and completes this synchronous request.
+    ///
+    /// # Safety
+    /// Run at DISPATCH_LEVEL or below without spin locks or resources needed
+    /// by upper completion callbacks. Values must match the request; errors
+    /// require IO_NO_INCREMENT. Completion consumes all IRP access rights.
+    #[must_use = "return this saved status from the dispatch routine"]
+    pub unsafe fn complete(
+        self,
+        status: CompletionStatus,
+        information: ULONG_PTR,
+        priority_boost: CCHAR,
+    ) -> NTSTATUS {
+        let status = NTSTATUS::from(status);
+        // SAFETY: Admission grants exclusive terminal status-block ownership.
+        let block = unsafe { &mut (*self.irp.as_ptr()).IoStatus };
+        block.__bindgen_anon_1.Status = status;
+        block.Information = information;
+        // SAFETY: The caller establishes the completion execution context;
+        // consuming self withdraws the sole Rust processing authority.
+        unsafe { super::complete_request(self.irp.as_ptr(), priority_boost) };
+        status
+    }
 }

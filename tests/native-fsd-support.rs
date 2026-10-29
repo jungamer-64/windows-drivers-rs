@@ -24,6 +24,13 @@ thread_local! {
     static EVENTS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
     static COMPLETED: RefCell<Option<(NTSTATUS, ULONG_PTR, CCHAR)>> = const { RefCell::new(None) };
     static GRANT_ACCESS: Cell<bool> = const { Cell::new(true) };
+    static LOWER_STATUS: Cell<NTSTATUS> = const { Cell::new(STATUS_PENDING) };
+    static MUTATE_LOWER: Cell<bool> = const { Cell::new(false) };
+    static APC_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static COMPLETION_CONTEXT: Cell<PIRP> = const { Cell::new(core::ptr::null_mut()) };
+    static TOP_LEVEL: Cell<PIRP> = const { Cell::new(core::ptr::null_mut()) };
+    static LOCK_AVAILABLE: Cell<bool> = const { Cell::new(true) };
+    static LOCK: Cell<usize> = const { Cell::new(0) };
     static TORN_DOWN: Cell<PFSRTL_ADVANCED_FCB_HEADER> = const { Cell::new(core::ptr::null_mut()) };
 }
 
@@ -37,6 +44,7 @@ pub fn take_teardown() -> PFSRTL_ADVANCED_FCB_HEADER {
 // SAFETY: The test binary supplies the exact generated kernel ABI.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn ExAcquireResourceSharedLite(_: PERESOURCE, wait: u8) -> u8 {
+    assert!(apc_depth() > 0);
     record(if wait == 0 {
         "shared-try"
     } else {
@@ -47,6 +55,7 @@ unsafe extern "C" fn ExAcquireResourceSharedLite(_: PERESOURCE, wait: u8) -> u8 
 // SAFETY: The test binary supplies the exact generated kernel ABI.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn ExAcquireResourceExclusiveLite(_: PERESOURCE, wait: u8) -> u8 {
+    assert!(apc_depth() > 0);
     record(if wait == 0 {
         "exclusive-try"
     } else {
@@ -57,6 +66,7 @@ unsafe extern "C" fn ExAcquireResourceExclusiveLite(_: PERESOURCE, wait: u8) -> 
 // SAFETY: The test binary supplies the exact generated kernel ABI.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn ExReleaseResourceLite(_: PERESOURCE) {
+    assert!(apc_depth() > 0);
     record("release");
 }
 // SAFETY: The test binary supplies the exact generated kernel ABI.
@@ -79,6 +89,7 @@ pub fn record(event: &'static str) {
 }
 
 unsafe extern "C" fn complete_request(irp: PIRP, boost: CCHAR) {
+    COMPLETION_CONTEXT.with(|slot| slot.set(top_level()));
     // SAFETY: The test owns the IRP exclusively until completion.
     let irp = unsafe { &mut *irp };
     // SAFETY: The completion caller populated the status arm.
@@ -90,15 +101,26 @@ unsafe extern "C" fn complete_request(irp: PIRP, boost: CCHAR) {
     record("complete");
 }
 
-unsafe extern "C" fn call_driver(_: PDEVICE_OBJECT, _: PIRP) -> NTSTATUS {
+unsafe extern "C" fn call_driver(_: PDEVICE_OBJECT, irp: PIRP) -> NTSTATUS {
+    if MUTATE_LOWER.with(Cell::get) {
+        // SAFETY: The forwarding fixture supplies a valid next stack location.
+        let next = unsafe { wdk_sys::ntddk::IoGetNextIrpStackLocation(irp) };
+        // SAFETY: The observer models lower-driver changes to its own stack
+        // only.
+        unsafe {
+            (*next).Control = 0;
+        };
+    }
     record("call-driver");
-    STATUS_PENDING
+    LOWER_STATUS.with(Cell::get)
 }
 
 unsafe extern "C" fn enter_region() {
+    APC_DEPTH.with(|depth| depth.set(depth.get() + 1));
     record("enter");
 }
 unsafe extern "C" fn leave_region() {
+    APC_DEPTH.with(|depth| depth.set(depth.get().checked_sub(1).unwrap()));
     record("leave");
 }
 
@@ -132,3 +154,74 @@ unsafe extern "C" fn initialize_event(event: PKEVENT, kind: EVENT_TYPE, state: u
 // the pointer has exactly the ABI declared for KeInitializeEvent.
 #[unsafe(no_mangle)]
 static __imp_KeInitializeEvent: unsafe extern "C" fn(PKEVENT, EVENT_TYPE, u8) = initialize_event;
+
+pub fn apc_depth() -> u32 {
+    APC_DEPTH.with(Cell::get)
+}
+pub fn top_level() -> PIRP {
+    TOP_LEVEL.with(Cell::get)
+}
+pub fn set_top_level(value: PIRP) {
+    TOP_LEVEL.with(|slot| slot.set(value));
+}
+pub fn allow_lock(value: bool) {
+    LOCK_AVAILABLE.with(|slot| slot.set(value));
+}
+// SAFETY: This slot implements the generated WDK resource ABI.
+#[unsafe(no_mangle)]
+static __imp_ExAcquireResourceSharedLite: unsafe extern "C" fn(PERESOURCE, u8) -> u8 =
+    ExAcquireResourceSharedLite;
+// SAFETY: This slot implements the generated WDK resource ABI.
+#[unsafe(no_mangle)]
+static __imp_ExAcquireResourceExclusiveLite: unsafe extern "C" fn(PERESOURCE, u8) -> u8 =
+    ExAcquireResourceExclusiveLite;
+// SAFETY: This slot implements the generated WDK release ABI.
+#[unsafe(no_mangle)]
+static __imp_ExReleaseResourceLite: unsafe extern "C" fn(PERESOURCE) = ExReleaseResourceLite;
+// SAFETY: This slot implements the generated WDK teardown ABI.
+#[unsafe(no_mangle)]
+static __imp_FsRtlTeardownPerStreamContexts: unsafe extern "C" fn(PFSRTL_ADVANCED_FCB_HEADER) =
+    FsRtlTeardownPerStreamContexts;
+unsafe extern "C" fn allocate_lock(_: wdk_sys::POOL_TYPE, _: wdk_sys::ULONG) -> PVOID {
+    record("allocate-lock");
+    if !LOCK_AVAILABLE.with(Cell::get) {
+        return core::ptr::null_mut();
+    }
+    LOCK.with(|slot| slot.as_ptr().cast())
+}
+unsafe extern "C" fn free_lock(lock: PVOID) {
+    LOCK.with(|slot| assert_eq!(lock, slot.as_ptr().cast()));
+    record("free-lock");
+}
+// SAFETY: This slot implements the WDK allocation ABI with stationary test
+// storage.
+#[unsafe(no_mangle)]
+static __imp_FsRtlAllocateAePushLock: unsafe extern "C" fn(
+    wdk_sys::POOL_TYPE,
+    wdk_sys::ULONG,
+) -> PVOID = allocate_lock;
+// SAFETY: This slot implements the exact WDK free ABI.
+#[unsafe(no_mangle)]
+static __imp_FsRtlFreeAePushLock: unsafe extern "C" fn(PVOID) = free_lock;
+// SAFETY: This stores only the execution thread's opaque recursion value.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn IoGetTopLevelIrp() -> PIRP {
+    top_level()
+}
+// SAFETY: This stores only the execution thread's opaque recursion value.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn IoSetTopLevelIrp(value: PIRP) {
+    set_top_level(value);
+}
+
+pub fn completion_context() -> PIRP {
+    COMPLETION_CONTEXT.with(Cell::get)
+}
+
+pub fn mutate_lower_stack(value: bool) {
+    MUTATE_LOWER.with(|slot| slot.set(value));
+}
+
+pub fn lower_status(status: NTSTATUS) {
+    LOWER_STATUS.with(|slot| slot.set(status));
+}

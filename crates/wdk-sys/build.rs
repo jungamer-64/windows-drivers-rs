@@ -842,6 +842,12 @@ fn join_worker_threads(
 fn main() -> anyhow::Result<()> {
     initialize_tracing()?;
     println!("cargo:rerun-if-changed={NTIFS_EXPORTS_SOURCE}");
+    println!("cargo:rerun-if-changed=include/wdk_file_system.h");
+    let native_include = PathBuf::from(
+        env::var_os("CARGO_MANIFEST_DIR").expect("Cargo supplies the package directory"),
+    )
+    .join("include");
+    println!("cargo:native_include={}", native_include.display());
 
     configure_wdk_library_build_and_then(|config| {
         let out_path = PathBuf::from(

@@ -20,6 +20,8 @@ pub extern "system" fn driver_entry(_: PDRIVER_OBJECT, _: PCUNICODE_STRING) -> N
     // implementations reachable through optimization and linker collection.
     black_box((
         ntddk::IoCallDriver as *const (),
+        wdk_sys::file_system::forward_pending_irp as *const (),
+        wdk_sys::file_system::forward_unpended_irp as *const (),
         ntddk::IoCompleteRequest as *const (),
         ntddk::IoGetCurrentIrpStackLocation as *const (),
         ntddk::IoGetNextIrpStackLocation as *const (),
@@ -50,16 +52,13 @@ pub extern "system" fn driver_entry(_: PDRIVER_OBJECT, _: PCUNICODE_STRING) -> N
 }
 
 unsafe fn link_resource_scopes(resource: &ResourceRef<'_>) -> Result<(), ResourceAcquireError> {
-    // SAFETY: This uncalled link anchor requires the shared scoped execution
-    // contract.
-    unsafe { resource.with_shared(|| ()) }?;
-    // SAFETY: This uncalled link anchor requires the exclusive scoped execution
-    // contract.
-    unsafe { resource.with_exclusive(|| ()) }?;
-    // SAFETY: This uncalled link anchor requires the shared scoped execution
-    // contract.
-    unsafe { resource.try_with_shared(|| ()) }?;
-    // SAFETY: This uncalled link anchor requires the exclusive scoped execution
-    // contract.
-    unsafe { resource.try_with_exclusive(|| ()) }
+    // SAFETY: This link anchor requires same-thread shared acquisition.
+    drop(unsafe { resource.acquire_shared() }?);
+    // SAFETY: This link anchor requires exclusive acquisition.
+    drop(unsafe { resource.acquire_exclusive() }?);
+    // SAFETY: This link anchor requires nonblocking shared acquisition.
+    drop(unsafe { resource.try_acquire_shared() }?);
+    // SAFETY: This link anchor requires nonblocking exclusive acquisition.
+    drop(unsafe { resource.try_acquire_exclusive() }?);
+    Ok(())
 }

@@ -23,6 +23,10 @@ pub use crate::{constants::*, types::*};
 #[cfg(any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF"))]
 pub mod ntddk;
 
+/// Native file-system ownership operations shared by Rust and C consumers.
+#[cfg(any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF"))]
+pub mod file_system;
+
 #[cfg(driver_model__driver_type = "UMDF")]
 pub mod windows;
 
