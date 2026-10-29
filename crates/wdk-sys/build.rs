@@ -41,7 +41,19 @@ const WDFFUNCTIONS_SYMBOL_NAME_PLACEHOLDER: &str =
     "<PLACEHOLDER FOR LITERAL VALUE CONTAINING WDFFUNCTIONS SYMBOL NAME>";
 const WDF_FUNCTION_COUNT_PLACEHOLDER: &str =
     "<PLACEHOLDER FOR EXPRESSION FOR NUMBER OF WDF FUNCTIONS IN `wdk_sys::WdfFunctions`";
-const NTIFS_EXPORTS_SOURCE: &str = "src/ntifs_exports.c";
+const NTIFS_EXPORT_SOURCES: &[&str] = &[
+    "src/ntifs_exports.c",
+    "src/ntifs_completion.c",
+    "src/ntifs_forward.c",
+    "src/ntifs_entry.c",
+    "src/ntifs_exit.c",
+    "src/ntifs_fast_mutex.c",
+    "src/fs_resource_shared.c",
+    "src/fs_resource_exclusive.c",
+    "src/fs_resource_release.c",
+    "src/fs_fcb_initialize.c",
+    "src/fs_fcb_teardown.c",
+];
 
 const WDF_FUNCTION_COUNT_DECLARATION_EXTERNAL_SYMBOL: &str =
     "// SAFETY: `crate::WdfFunctionCount` is generated as a mutable static, but is not supposed \
@@ -297,7 +309,7 @@ fn generate_ntifs_exports(out_path: &Path, config: &Config) -> Result<(), Config
     let bindgen_builder = bindgen::Builder::wdk_default(config)?
         .with_codegen_config(CodegenConfig::FUNCTIONS)
         .allowlist_function("wdk_sys_.*")
-        .header(NTIFS_EXPORTS_SOURCE);
+        .header("include/wdk_file_system.h");
     trace!(bindgen_builder = ?bindgen_builder);
 
     let output_file_path = out_path.join("ntifs_exports.rs");
@@ -710,11 +722,10 @@ fn start_ntifs_export_task<'scope>(
                     }
                     cc_builder
                         .includes(config.include_paths()?)
-                        // Keep every header-only export independently discardable. Host-side
-                        // tests for driver crates must not acquire kernel imports from wrappers
-                        // that their reachable code does not use.
+                        // Separate translation units keep kernel imports out of consumers that
+                        // use only pure header operations; /Gy also permits image collection.
                         .flag("/Gy")
-                        .file(NTIFS_EXPORTS_SOURCE)
+                        .files(NTIFS_EXPORT_SOURCES)
                         .compile("ntifs_exports");
                     Ok::<(), ConfigError>(())
                 })
@@ -841,7 +852,9 @@ fn join_worker_threads(
 
 fn main() -> anyhow::Result<()> {
     initialize_tracing()?;
-    println!("cargo:rerun-if-changed={NTIFS_EXPORTS_SOURCE}");
+    for source in NTIFS_EXPORT_SOURCES {
+        println!("cargo:rerun-if-changed={source}");
+    }
     println!("cargo:rerun-if-changed=include/wdk_file_system.h");
     let native_include = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("Cargo supplies the package directory"),

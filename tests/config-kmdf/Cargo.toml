@@ -17,6 +17,10 @@ target-kmdf-version-minor = 33
 name = "native-fsd-api"
 path = "../native-fsd-api.rs"
 
+[[test]]
+name = "native-fsd-stack"
+path = "../native-fsd-stack.rs"
+
 [dev-dependencies]
 wdk.path = "../../crates/wdk"
 wdk-macros-tests.path = "../wdk-macros-tests"
