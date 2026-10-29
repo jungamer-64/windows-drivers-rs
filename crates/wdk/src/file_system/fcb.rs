@@ -24,46 +24,6 @@ pub struct FcbHeader<'a> {
 }
 
 impl<'a> FcbHeader<'a> {
-    /// Initializes stream support and optional file-context support in place.
-    /// The auto-expand push lock is left absent; its allocation and lifetime
-    /// belong to the driver when supplied through the raw WDK boundary.
-    ///
-    /// # Safety
-    ///
-    /// IRQL must be at most `APC_LEVEL`. The header must not already have live
-    /// contexts, cache-map users, or oplock state. Its base fields must contain
-    /// valid driver-supplied values. The fast mutex must be initialized and in
-    /// nonpaged pool. The optional slot must belong to the owning per-file
-    /// structure. All supplied storage must remain at these addresses until
-    /// external references end and teardown finishes, even if the Rust view is
-    /// dropped or forgotten. Paging-file headers must be in nonpaged pool.
-    /// Kernel and driver access must obey the WDK synchronization protocol.
-    pub unsafe fn initialize(
-        header: Pin<&'a mut FSRTL_ADVANCED_FCB_HEADER>,
-        fast_mutex: Pin<&'a mut FAST_MUTEX>,
-        file_context_slot: Option<Pin<&'a mut PVOID>>,
-    ) -> Self {
-        let header = NonNull::from(header.get_mut());
-        let fast_mutex = core::ptr::from_mut(fast_mutex.get_mut());
-        let file_context_slot = file_context_slot.map_or(core::ptr::null_mut(), |slot| {
-            core::ptr::from_mut(slot.get_mut())
-        });
-        // SAFETY: The caller supplies stationary, initialized storage with
-        // the lifetime and pool guarantees required by the WDK macro.
-        unsafe {
-            ntddk::FsRtlSetupAdvancedHeaderEx2(
-                header.as_ptr(),
-                fast_mutex,
-                file_context_slot,
-                core::ptr::null_mut(),
-            );
-        };
-        Self {
-            header,
-            lifetime: PhantomData,
-        }
-    }
-
     /// Borrows the header's address for WDK interoperation. External users must
     /// stop before teardown; this pointer does not transfer storage ownership.
     #[must_use]

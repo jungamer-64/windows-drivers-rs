@@ -142,32 +142,4 @@ impl DispatchIrp {
         unsafe { &*stack }
     }
 
-    /// Publishes the final status and information, completes the IRP, and
-    /// returns the saved dispatch status without accessing the completed IRP.
-    /// `information` retains its request-specific WDK meaning.
-    ///
-    /// # Safety
-    ///
-    /// IRQL must be at most `DISPATCH_LEVEL`, with no spin lock held. The
-    /// status and information must be appropriate for this request.
-    /// `priority_boost` must be a system-defined boost; errors require
-    /// `IO_NO_INCREMENT`. No resource needed by an upper completion
-    /// callback may be held.
-    #[must_use = "return this saved status from the dispatch routine"]
-    pub unsafe fn complete(
-        mut self,
-        status: CompletionStatus,
-        information: ULONG_PTR,
-        priority_boost: CCHAR,
-    ) -> NTSTATUS {
-        let status = NTSTATUS::from(status);
-        // SAFETY: The constructor grants exclusive access until completion.
-        let request = unsafe { self.irp.as_mut() };
-        request.IoStatus.__bindgen_anon_1.Status = status;
-        request.IoStatus.Information = information;
-        // SAFETY: The caller establishes the completion execution context.
-        // Consuming self removes the only Rust processing authority.
-        unsafe { ntddk::IoCompleteRequest(self.irp.as_ptr(), priority_boost) };
-        status
-    }
 }
