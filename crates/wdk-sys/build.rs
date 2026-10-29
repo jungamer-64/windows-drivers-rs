@@ -53,6 +53,12 @@ const NTIFS_EXPORT_SOURCES: &[&str] = &[
     "src/fs_resource_release.c",
     "src/fs_fcb_initialize.c",
     "src/fs_fcb_teardown.c",
+    "src/fs_requestor_output.c",
+    "src/fs_cc_read.c",
+    "src/fs_cc_prepare_write.c",
+    "src/fs_cc_complete_write.c",
+    "src/fs_notify.c",
+    "src/fs_oplock.c",
 ];
 
 const WDF_FUNCTION_COUNT_DECLARATION_EXTERNAL_SYMBOL: &str =
@@ -720,8 +726,18 @@ fn start_ntifs_export_task<'scope>(
                     for (key, value) in config.preprocessor_definitions() {
                         cc_builder.define(&key, value.as_deref());
                     }
+                    // clang-cl needs asynchronous SEH for hardware faults in
+                    // requestor memory.
+                    let compiler = cc_builder.get_compiler();
+                    if compiler.is_like_clang_cl() {
+                        cc_builder.flag("/EHa");
+                        for include in config.include_paths()? {
+                            cc_builder.flag(format!("-imsvc{}", include.display()));
+                        }
+                    } else {
+                        cc_builder.includes(config.include_paths()?);
+                    }
                     cc_builder
-                        .includes(config.include_paths()?)
                         // Separate translation units keep kernel imports out of consumers that
                         // use only pure header operations; /Gy also permits image collection.
                         .flag("/Gy")
@@ -861,6 +877,8 @@ fn main() -> anyhow::Result<()> {
     )
     .join("include");
     println!("cargo:native_include={}", native_include.display());
+    println!("cargo:rerun-if-changed=src/fs_seh.h");
+    println!("cargo:rerun-if-changed=src/fs_recursion.h");
 
     configure_wdk_library_build_and_then(|config| {
         let out_path = PathBuf::from(

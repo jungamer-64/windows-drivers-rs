@@ -225,3 +225,12 @@ pub fn mutate_lower_stack(value: bool) {
 pub fn lower_status(status: NTSTATUS) {
     LOWER_STATUS.with(|slot| slot.set(status));
 }
+
+// SAFETY: Native observers use the import ABI for the same thread-local
+// context.
+#[unsafe(no_mangle)]
+static __imp_IoGetTopLevelIrp: unsafe extern "C" fn() -> PIRP = IoGetTopLevelIrp;
+// SAFETY: Native observers use the import ABI for the same thread-local
+// context.
+#[unsafe(no_mangle)]
+static __imp_IoSetTopLevelIrp: unsafe extern "C" fn(PIRP) = IoSetTopLevelIrp;

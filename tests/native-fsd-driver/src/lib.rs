@@ -47,6 +47,18 @@ pub extern "system" fn driver_entry(_: PDRIVER_OBJECT, _: PCUNICODE_STRING) -> N
         FcbHeader::as_common_ptr as *const (),
         FcbHeader::teardown as *const (),
         link_resource_scopes as *const (),
+        wdk::file_system::LockedRequestorOutput::capture as *const (),
+        wdk::file_system::LockedRequestorOutput::copy_from as *const (),
+        wdk_sys::file_system::cc_read_mdl as *const (),
+        wdk_sys::file_system::cc_prepare_mdl_write as *const (),
+        wdk_sys::file_system::cc_complete_mdl_write as *const (),
+        wdk_sys::file_system::notify_change_directory as *const (),
+        wdk_sys::file_system::notify_report_change as *const (),
+        wdk_sys::file_system::notify_cleanup as *const (),
+        wdk_sys::file_system::notify_cleanup_all as *const (),
+        wdk_sys::file_system::oplock_fsctrl as *const (),
+        wdk_sys::file_system::check_oplock as *const (),
+        wdk_sys::file_system::uninitialize_oplock as *const (),
     ));
     STATUS_UNSUCCESSFUL
 }

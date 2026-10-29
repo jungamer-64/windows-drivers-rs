@@ -1111,7 +1111,8 @@ impl Config {
         // Base libraries are derived from WindowsDriver.KernelMode.props
         // (WDM/KMDF) and WindowsDriver.UserMode.props (UMDF) in the Ni (22H2)
         // WDK. ARM64 WDM/KMDF builds also link `arm64rt`, derived from
-        // WindowsDriver.arm64.props.
+        // WindowsDriver.arm64.props. VolatileAccessK supplies the WDK
+        // shared-memory accessors used by native requestor-buffer boundaries.
         match &self.driver_config {
             DriverConfig::Wdm => {
                 directives.extend([
@@ -1119,6 +1120,7 @@ impl Config {
                     static_lib("ntoskrnl"),
                     static_lib("hal"),
                     static_lib("wmilib"),
+                    static_lib("volatileaccessk"),
                 ]);
                 if self.cpu_architecture == CpuArchitecture::Arm64 {
                     directives.push(static_lib("arm64rt"));
@@ -1130,6 +1132,7 @@ impl Config {
                     static_lib("ntoskrnl"),
                     static_lib("hal"),
                     static_lib("wmilib"),
+                    static_lib("volatileaccessk"),
                     static_lib("WdfLdr"),
                     static_lib("WdfDriverEntry"),
                 ]);
@@ -2225,7 +2228,13 @@ mod tests {
 
             assert_eq!(
                 lib_names(&config.base_libraries()),
-                ["BufferOverflowFastFailK", "ntoskrnl", "hal", "wmilib"]
+                [
+                    "BufferOverflowFastFailK",
+                    "ntoskrnl",
+                    "hal",
+                    "wmilib",
+                    "volatileaccessk"
+                ]
             );
         }
 
@@ -2240,6 +2249,7 @@ mod tests {
                     "ntoskrnl",
                     "hal",
                     "wmilib",
+                    "volatileaccessk",
                     "arm64rt"
                 ]
             );
@@ -2256,6 +2266,7 @@ mod tests {
                     "ntoskrnl",
                     "hal",
                     "wmilib",
+                    "volatileaccessk",
                     "WdfLdr",
                     "WdfDriverEntry"
                 ]
@@ -2273,6 +2284,7 @@ mod tests {
                     "ntoskrnl",
                     "hal",
                     "wmilib",
+                    "volatileaccessk",
                     "WdfLdr",
                     "WdfDriverEntry",
                     "arm64rt"

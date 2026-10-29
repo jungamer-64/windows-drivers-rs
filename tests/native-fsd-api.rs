@@ -673,3 +673,72 @@ fn pending_forwarding_preserves_the_upper_pending_bit() {
     }
     support::lower_status(STATUS_PENDING);
 }
+
+// SAFETY: The fixture compiles the native observers with the installed WDK ABI.
+#[link(name = "native_fsd_boundary_support", kind = "static")]
+unsafe extern "C" {
+    fn wdk_test_reset_output();
+    fn wdk_test_output_balance() -> u32;
+    fn wdk_test_output_faults();
+    fn wdk_test_cache_mdl();
+    fn wdk_test_fsrtl_recursion();
+}
+
+#[test]
+fn locked_output_owns_mapping_until_publication_or_drop() {
+    use wdk::file_system::LockedRequestorOutput;
+    let mut buffer = [0_u8; 32];
+    // SAFETY: Each native observer is isolated to the current test thread.
+    unsafe { wdk_test_reset_output() };
+    // SAFETY: No Rust reference aliases the granted output range while
+    // captured.
+    let output =
+        unsafe { LockedRequestorOutput::capture(buffer.as_mut_ptr().cast(), 32, 1) }.unwrap();
+    assert_eq!(output.capacity(), 32);
+    // SAFETY: The host fixture models PASSIVE_LEVEL and source is disjoint.
+    unsafe { output.copy_from(&[7; 16]) }.unwrap();
+    assert_eq!(&buffer[..16], &[7; 16]);
+    // SAFETY: Observer checks balanced lock/MDL ownership after publication.
+    assert_eq!(unsafe { wdk_test_output_balance() }, 1);
+
+    // SAFETY: Exclusive range ownership is granted until the output is dropped.
+    let output =
+        unsafe { LockedRequestorOutput::capture(buffer.as_mut_ptr().cast(), 32, 0) }.unwrap();
+    drop(output);
+    // SAFETY: Observer checks that cancellation teardown performed no copy.
+    assert_eq!(unsafe { wdk_test_output_balance() }, 1);
+
+    // SAFETY: Exclusive range ownership is granted through consuming rejection.
+    let output =
+        unsafe { LockedRequestorOutput::capture(buffer.as_mut_ptr().cast(), 32, 1) }.unwrap();
+    // SAFETY: The host fixture models PASSIVE_LEVEL with a disjoint oversized
+    // source.
+    assert_eq!(
+        unsafe { output.copy_from(&[8; 33]) },
+        Err(wdk_sys::STATUS_INVALID_PARAMETER)
+    );
+    // SAFETY: Oversized publication still consumes and releases its output.
+    assert_eq!(unsafe { wdk_test_output_balance() }, 1);
+    assert_eq!(&buffer[..16], &[7; 16]);
+}
+
+#[test]
+fn output_probe_and_mapping_failures_release_exactly_the_acquired_resources() {
+    // SAFETY: This isolated host oracle contains all raised faults in C SEH
+    // frames.
+    unsafe { wdk_test_output_faults() };
+}
+
+#[test]
+fn cache_mdl_partial_acquisitions_and_write_completion_failures_consume_ownership() {
+    // SAFETY: Native oracle retains FILE_OBJECT/MDL storage and contains SEH in
+    // C.
+    unsafe { wdk_test_cache_mdl() };
+}
+
+#[test]
+fn fsrtl_callbacks_preserve_recursion_context_through_native_unwinding() {
+    // SAFETY: Native oracle owns all callback storage and catches SEH before
+    // returning.
+    unsafe { wdk_test_fsrtl_recursion() };
+}

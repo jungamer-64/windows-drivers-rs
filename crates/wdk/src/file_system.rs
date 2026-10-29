@@ -13,11 +13,13 @@ use core::{fmt, marker::PhantomData, ptr::NonNull};
 pub use self::{
     fcb::FcbHeader,
     irp::{CompletionStatus, DispatchIrp, InvalidCompletionStatus, InvalidDispatchIrp},
+    output::LockedRequestorOutput,
     resource::{ResourceAcquireError, ResourceGuard, ResourceRef},
 };
 
 mod fcb;
 mod irp;
+mod output;
 mod resource;
 
 /// A pointer cannot be admitted as an aligned, non-null kernel object.
