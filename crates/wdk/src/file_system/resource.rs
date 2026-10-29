@@ -165,7 +165,8 @@ impl ResourceRef<'_> {
                 ntddk::ExAcquireResourceSharedLite(self.resource.as_ptr(), u8::from(wait))
             },
             // SAFETY: The resource is live, normal APCs are disabled, and the
-            // public operation's contract excludes a shared-to-exclusive upgrade.
+            // public operation's contract excludes a shared-to-exclusive
+            // upgrade.
             Access::Exclusive => unsafe {
                 ntddk::ExAcquireResourceExclusiveLite(self.resource.as_ptr(), u8::from(wait))
             },

@@ -242,8 +242,16 @@ fn read_registry_key_string_value(
     // SAFETY: `&mut opened_key_handle` is coerced to a &raw mut, so the address passed as the
     // argument is always valid. `&mut opened_key_handle` is coerced to a pointer of the correct
     // type.
-    unsafe { RegOpenKeyExA(key_handle, sub_key, 0, KEY_READ, &raw mut opened_key_handle) }
-        .is_ok()
+    unsafe {
+        RegOpenKeyExA(
+            key_handle,
+            sub_key,
+            None,
+            KEY_READ,
+            &raw mut opened_key_handle,
+        )
+    }
+    .is_ok()
     {
         if
         // SAFETY: `opened_key_handle` is valid key opened with the `KEY_QUERY_VALUE` access right
@@ -483,8 +491,8 @@ mod tests {
                     s!("ProgramFilesDir")
                 ),
                 Some(
-                    // SAFETY: program_files_dir pointer stays valid for reads up until and
-                    // including its terminating null
+                    // SAFETY: program_files_dir pointer stays valid for reads
+                    // up until and including its terminating null
                     unsafe { program_files_dir.to_string() }
                         .expect("Path resolved from FOLDERID_ProgramFiles should be valid UTF16.")
                 )

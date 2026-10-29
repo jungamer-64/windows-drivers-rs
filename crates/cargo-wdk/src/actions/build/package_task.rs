@@ -629,7 +629,8 @@ impl<'a> PackageTask<'a> {
                     warn!("InfVerif skipped for samples class. WDK Build: {wdk_build_number}");
                     return Ok(());
                 }
-                // Use the `/samples` flag after the range and the `/msft` flag before the range
+                // Use the `/samples` flag after the range and the `/msft` flag
+                // before the range
                 n if n > *MISSING_SAMPLE_FLAG_WDK_BUILD_NUMBER_RANGE.end() => "/samples",
                 _ => "/msft",
             }
@@ -902,8 +903,8 @@ mod tests {
 
                     command_exec
                         .expect_run()
-                        .withf(move |cmd: &str, args: &[&str], _, _| {
-                            if cmd != "stampinf" {
+                        .withf(move |cmd: &dyn AsRef<Path>, args: &[&str], _, _| {
+                            if cmd.as_ref() != Path::new("stampinf") {
                                 return false;
                             }
                             let has_v = args.contains(&"-v");
@@ -963,8 +964,8 @@ mod tests {
         let expected: Vec<String> = expected.iter().map(ToString::to_string).collect();
         command_exec
             .expect_run()
-            .withf(move |cmd: &str, args: &[&str], _, _| {
-                cmd == "stampinf"
+            .withf(move |cmd: &dyn AsRef<Path>, args: &[&str], _, _| {
+                cmd.as_ref() == Path::new("stampinf")
                     && args.len() >= 2
                     && args[0] == "-f"
                     && args[1] == expected_inf_file_path
@@ -1087,8 +1088,8 @@ mod tests {
         let mut command_exec = CommandExec::default();
         command_exec
             .expect_run()
-            .withf(move |cmd: &str, args: &[&str], _, _| {
-                cmd == "inf2cat"
+            .withf(move |cmd: &dyn AsRef<Path>, args: &[&str], _, _| {
+                cmd.as_ref() == Path::new("inf2cat")
                     && args[0].starts_with("/driver:")
                     && args.contains(&"/os:10_x64")
                     && args.contains(&"/uselocaltime")
@@ -1134,8 +1135,10 @@ mod tests {
         let mut command_exec = CommandExec::default();
         command_exec
             .expect_run()
-            .withf(move |cmd: &str, args: &[&str], _, _| {
-                cmd == "inf2cat" && args.len() == 1 && args[0].starts_with("/driver:")
+            .withf(move |cmd: &dyn AsRef<Path>, args: &[&str], _, _| {
+                cmd.as_ref() == Path::new("inf2cat")
+                    && args.len() == 1
+                    && args[0].starts_with("/driver:")
             })
             .once()
             .return_once(|_, _, _, _| {
@@ -1181,8 +1184,8 @@ mod tests {
         let mut command_exec = CommandExec::default();
         command_exec
             .expect_run()
-            .withf(move |cmd: &str, args: &[&str], _, _| {
-                cmd == "inf2cat"
+            .withf(move |cmd: &dyn AsRef<Path>, args: &[&str], _, _| {
+                cmd.as_ref() == Path::new("inf2cat")
                     && args[0].starts_with("/driver:")
                     && args.contains(&"/os:10_x64,10_CO_X64")
                     && args.contains(&"/verbose")
@@ -1249,7 +1252,7 @@ mod tests {
             command_exec
                 .expect_run_with_redaction()
                 .withf(move |command, args, redaction_indices, _env, _cwd| {
-                    command == "signtool"
+                    command.as_ref() == Path::new("signtool")
                         && args == expected
                         && redaction_indices == expected_redaction_indices.as_slice()
                 })
@@ -1396,7 +1399,7 @@ mod tests {
                 command_exec
                     .expect_run_with_redaction()
                     .withf(move |command, args, redaction_indices, _env, _cwd| {
-                        command == "signtool"
+                        command.as_ref() == Path::new("signtool")
                             && args.len() == 2
                             && args[0] == "sign"
                             && Path::new(args[1]).ends_with(file_name)
@@ -1431,7 +1434,7 @@ mod tests {
             command_exec
                 .expect_run_with_redaction()
                 .withf(|command, args, _redaction_indices, _env, _cwd| {
-                    command == "signtool" && args.first() == Some(&"sign")
+                    command.as_ref() == Path::new("signtool") && args.first() == Some(&"sign")
                 })
                 .once()
                 .returning(|_, _, _, _, _| {
@@ -1506,8 +1509,8 @@ mod tests {
         let mut command_exec = CommandExec::default();
         command_exec
             .expect_run()
-            .withf(move |cmd: &str, args: &[&str], _, _| {
-                cmd == "infverif"
+            .withf(move |cmd: &dyn AsRef<Path>, args: &[&str], _, _| {
+                cmd.as_ref() == Path::new("infverif")
                     && args.len() >= 2
                     && args[0] == "/v"
                     && args[1] == expected_mode_flag
@@ -1599,8 +1602,8 @@ mod tests {
         let mut command_exec = CommandExec::default();
         command_exec
             .expect_run()
-            .withf(move |cmd: &str, args: &[&str], _, _| {
-                cmd == "infverif"
+            .withf(move |cmd: &dyn AsRef<Path>, args: &[&str], _, _| {
+                cmd.as_ref() == Path::new("infverif")
                     && args[..args.len() - 1] == expected_args_before_inf
                     && args[args.len() - 1] == expected_inf_path
             })
