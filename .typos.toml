@@ -1,6 +1,10 @@
 [files]
 extend-exclude = ["**/Cargo.lock", "**/target/**"]
 
+[default.extend-words]
+# Windows Structured Exception Handling
+seh = "seh"
+
 # Allow specific identifiers in code derived from WDK
 [default.extend-identifiers]
 STATUS_FVE_MOR_FAILED = "STATUS_FVE_MOR_FAILED"
