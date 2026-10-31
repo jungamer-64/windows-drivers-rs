@@ -157,6 +157,9 @@ macro_rules! dbg {
 /// driver model: WDM/KMDF truncates at the first NUL (via `as_c_str()`),
 /// while UMDF strips NUL bytes and prints the remaining content.
 #[doc(hidden)]
+// Expand the macro implementation in the consumer without selecting an archive
+// object that also references unrelated kernel-only APIs in unoptimized builds.
+#[inline]
 pub fn _print(args: fmt::Arguments) {
     cfg_if::cfg_if! {
         if #[cfg(any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF"))] {
