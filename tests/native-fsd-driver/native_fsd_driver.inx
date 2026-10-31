@@ -1,0 +1,56 @@
+; Copyright (c) Microsoft Corporation
+; License: MIT OR Apache-2.0
+; Kernel-link fixture; DriverEntry rejects loading.
+
+[Version]
+Signature = "$WINDOWS NT$"
+Class = Sample
+ClassGuid = {78A1C341-4539-11d3-B88D-00C04FAD5171}
+Provider = %ProviderString%
+PnpLockDown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskId1%,,,""
+
+[SourceDisksFiles]
+native_fsd_driver.sys = 1,,
+
+[ClassInstall32]
+AddReg = SampleClassReg
+
+[SampleClassReg]
+HKR,,,0,%ClassName%
+HKR,,Icon,,-5
+
+[Manufacturer]
+%StdMfg% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = NativeFsdDevice, root\WDR_NATIVE_FSD_TEST
+
+[NativeFsdDevice.NT$ARCH$]
+CopyFiles = Drivers_Dir
+
+[Drivers_Dir]
+native_fsd_driver.sys
+
+[NativeFsdDevice.NT$ARCH$.Services]
+AddService = NativeFsdTest, 0x00000002, NativeFsdService
+
+[NativeFsdService]
+DisplayName = %ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %13%\native_fsd_driver.sys
+
+[Strings]
+ProviderString = "WDR Tests"
+StdMfg = "WDR Tests"
+DiskId1 = "Native FSD Test Disk"
+DeviceDesc = "Native FSD Link Test"
+ServiceDesc = "Native FSD Link Test"
+ClassName = "Sample Device"
