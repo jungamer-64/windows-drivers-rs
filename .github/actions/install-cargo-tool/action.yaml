@@ -57,3 +57,19 @@ runs:
           }
           if ($subcommand) { & cargo $subcommand --version } else { & $toolName --version }
         }
+
+    - name: Configure rust-script build cache
+      if: inputs.tool == 'cargo-make' || startsWith(inputs.tool, 'cargo-make@')
+      shell: pwsh
+      run: |
+        # Hashed script names exceed MAX_PATH in Cargo's intermediate layout.
+        # Scope this configuration to rust-script's generated projects: WDK build
+        # scripts discover their consumer manifest through OUT_DIR ancestors.
+        $cacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'rust-script'
+        $configDir = Join-Path $cacheRoot '.cargo'
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        $buildDir = (Join-Path $env:RUNNER_TEMP 'b/{workspace-path-hash}').Replace('\', '/')
+        Set-Content -LiteralPath (Join-Path $configDir 'config.toml') -Value @(
+          '[build]'
+          "build-dir = '$buildDir'"
+        )
