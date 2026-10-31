@@ -40,5 +40,13 @@ VOID NTAPI wdk_sys_release_requestor_output(PMDL mdl)
 
 VOID NTAPI wdk_sys_copy_requestor_output(PVOID mapping, const VOID *source, ULONG length)
 {
-    RtlCopyVolatileMemory(mapping, source, length);
+    volatile UCHAR *destination = (volatile UCHAR *)mapping;
+    const volatile UCHAR *input = (const volatile UCHAR *)source;
+    ULONG index;
+    /* The requestor may change its mapping concurrently. Volatile byte accesses
+     * keep the copy observable without imposing alignment or a WDK runtime-library
+     * requirement. This is not an atomic publication or a memory barrier. */
+    for (index = 0; index < length; index++) {
+        destination[index] = input[index];
+    }
 }

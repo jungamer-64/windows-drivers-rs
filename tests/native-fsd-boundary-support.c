@@ -8,7 +8,7 @@ __declspec(dllimport) VOID NTAPI RaiseException(ULONG code, ULONG flags, ULONG c
 
 static __declspec(thread) MDL output_mdl;
 static __declspec(thread) PVOID output_buffer;
-static __declspec(thread) ULONG mdl_allocations, mdl_frees, page_locks, page_unlocks, copies;
+static __declspec(thread) ULONG mdl_allocations, mdl_frees, page_locks, page_unlocks;
 static __declspec(thread) BOOLEAN allocate_failure, mapping_failure;
 static __declspec(thread) NTSTATUS probe_exception;
 
@@ -50,26 +50,15 @@ PVOID (NTAPI *__imp_MmMapLockedPagesSpecifyCache)(PMDL, KPROCESSOR_MODE, MEMORY_
     PVOID, ULONG, ULONG) = test_map;
 BOOLEAN (NTAPI *__imp_FsRtlIsNtstatusExpected)(NTSTATUS) = test_expected;
 
-volatile VOID *RtlCopyVolatileMemory(volatile VOID *destination, const volatile VOID *source, SIZE_T length)
-{
-    SIZE_T index;
-    for (index = 0; index < length; index++) {
-        ((volatile UCHAR *)destination)[index] = ((const volatile UCHAR *)source)[index];
-    }
-    copies++;
-    return destination;
-}
-
 VOID wdk_test_reset_output(VOID)
 {
-    mdl_allocations = mdl_frees = page_locks = page_unlocks = copies = 0;
+    mdl_allocations = mdl_frees = page_locks = page_unlocks = 0;
     allocate_failure = mapping_failure = FALSE;
     probe_exception = STATUS_SUCCESS;
 }
-ULONG wdk_test_output_balance(VOID)
+VOID wdk_test_output_balance(VOID)
 {
     assert(mdl_allocations == mdl_frees && page_locks == page_unlocks);
-    return copies;
 }
 VOID wdk_test_output_faults(VOID)
 {
@@ -100,7 +89,7 @@ VOID wdk_test_output_faults(VOID)
     mapping_failure = TRUE;
     assert(wdk_sys_capture_requestor_output(buffer, 32, UserMode, &mdl, &mapping) == STATUS_INSUFFICIENT_RESOURCES);
     assert(mdl == NULL && mapping == NULL && page_unlocks == 1);
-    assert(wdk_test_output_balance() == 0);
+    wdk_test_output_balance();
 }
 
 static __declspec(thread) MDL cache_mdl;

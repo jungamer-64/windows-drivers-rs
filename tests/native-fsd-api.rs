@@ -678,7 +678,7 @@ fn pending_forwarding_preserves_the_upper_pending_bit() {
 #[link(name = "native_fsd_boundary_support", kind = "static")]
 unsafe extern "C" {
     fn wdk_test_reset_output();
-    fn wdk_test_output_balance() -> u32;
+    fn wdk_test_output_balance();
     fn wdk_test_output_faults();
     fn wdk_test_cache_mdl();
     fn wdk_test_fsrtl_recursion();
@@ -698,15 +698,18 @@ fn locked_output_owns_mapping_until_publication_or_drop() {
     // SAFETY: The host fixture models PASSIVE_LEVEL and source is disjoint.
     unsafe { output.copy_from(&[7; 16]) }.unwrap();
     assert_eq!(&buffer[..16], &[7; 16]);
+    assert_eq!(&buffer[16..], &[0; 16]);
+    let published = buffer;
     // SAFETY: Observer checks balanced lock/MDL ownership after publication.
-    assert_eq!(unsafe { wdk_test_output_balance() }, 1);
+    unsafe { wdk_test_output_balance() };
 
     // SAFETY: Exclusive range ownership is granted until the output is dropped.
     let output =
         unsafe { LockedRequestorOutput::capture(buffer.as_mut_ptr().cast(), 32, 0) }.unwrap();
     drop(output);
-    // SAFETY: Observer checks that cancellation teardown performed no copy.
-    assert_eq!(unsafe { wdk_test_output_balance() }, 1);
+    // SAFETY: Observer checks balanced ownership after cancellation teardown.
+    unsafe { wdk_test_output_balance() };
+    assert_eq!(buffer, published);
 
     // SAFETY: Exclusive range ownership is granted through consuming rejection.
     let output =
@@ -718,8 +721,30 @@ fn locked_output_owns_mapping_until_publication_or_drop() {
         Err(wdk_sys::STATUS_INVALID_PARAMETER)
     );
     // SAFETY: Oversized publication still consumes and releases its output.
-    assert_eq!(unsafe { wdk_test_output_balance() }, 1);
-    assert_eq!(&buffer[..16], &[7; 16]);
+    unsafe { wdk_test_output_balance() };
+    assert_eq!(buffer, published);
+}
+
+#[test]
+fn locked_output_copies_exactly_the_source_range_without_alignment_requirements() {
+    use wdk::file_system::LockedRequestorOutput;
+    let source = core::array::from_fn::<_, 32, _>(|index| u8::try_from(index).unwrap());
+    for length in [0, 1, 7, 16, 31, 32] {
+        let mut buffer = [0xA5; 34];
+        let mapping = buffer[1..].as_mut_ptr().cast();
+        // SAFETY: Each native observer is isolated to the current test thread.
+        unsafe { wdk_test_reset_output() };
+        // SAFETY: The 32-byte interior range remains live without Rust aliases
+        // until the consuming publication releases its mapping.
+        let output = unsafe { LockedRequestorOutput::capture(mapping, 32, 1) }.unwrap();
+        // SAFETY: The host fixture models PASSIVE_LEVEL and source is disjoint.
+        unsafe { output.copy_from(&source[..length]) }.unwrap();
+        let mut expected = [0xA5; 34];
+        expected[1..1 + length].copy_from_slice(&source[..length]);
+        assert_eq!(buffer, expected);
+        // SAFETY: Publication consumed the mapping before this ownership check.
+        unsafe { wdk_test_output_balance() };
+    }
 }
 
 #[test]
