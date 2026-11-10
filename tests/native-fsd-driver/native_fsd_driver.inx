@@ -4,8 +4,8 @@
 
 [Version]
 Signature = "$WINDOWS NT$"
-Class = Sample
-ClassGuid = {78A1C341-4539-11d3-B88D-00C04FAD5171}
+Class = System
+ClassGuid = {4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider = %ProviderString%
 PnpLockDown = 1
 
@@ -17,13 +17,6 @@ DefaultDestDir = 13
 
 [SourceDisksFiles]
 native_fsd_driver.sys = 1,,
-
-[ClassInstall32]
-AddReg = SampleClassReg
-
-[SampleClassReg]
-HKR,,,0,%ClassName%
-HKR,,Icon,,-5
 
 [Manufacturer]
 %StdMfg% = Standard,NT$ARCH$.10.0...16299
@@ -53,4 +46,3 @@ StdMfg = "WDR Tests"
 DiskId1 = "Native FSD Test Disk"
 DeviceDesc = "Native FSD Link Test"
 ServiceDesc = "Native FSD Link Test"
-ClassName = "Sample Device"
