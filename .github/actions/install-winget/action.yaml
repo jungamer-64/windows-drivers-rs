@@ -126,7 +126,18 @@ runs:
         # Select a version that matches both major and minor versions, and a patch version no
         # greater than the detected CLI version.
         $versionRange = "[$($cliVersion.Major).$($cliVersion.Minor).0, $cliVersion]"
-        $allVersions = Find-PSResource -Name Microsoft.WinGet.Client -Repository PSGallery -Version $versionRange -ErrorAction Stop
+        # Gallery metadata requests can fail on hosted runners before any module
+        # installation takes place. Retry only the read and preserve the last error.
+        for ($attempt = 1; ; $attempt++) {
+          try {
+            $allVersions = Find-PSResource -Name Microsoft.WinGet.Client -Repository PSGallery -Version $versionRange -ErrorAction Stop
+            break
+          } catch {
+            if ($attempt -eq 3) { throw }
+            Write-Warning "WinGet module lookup failed on attempt ${attempt}: $($_.Exception.Message)"
+            Start-Sleep -Seconds (5 * $attempt)
+          }
+        }
         if (-not $allVersions) {
           throw "No Microsoft.WinGet.Client module found in range $versionRange on PSGallery."
         }

@@ -30,7 +30,16 @@ runs:
                   $query = $_
                   Write-Host "Searching with query: '$query'..."
                   
-                  $packages = @(Get-WinGetPackage -Query $query)
+                  for ($attempt = 1; ; $attempt++) {
+                      try {
+                          $packages = @(Get-WinGetPackage -Query $query -ErrorAction Stop)
+                          break
+                      } catch [Microsoft.WinGet.Client.Engine.Exceptions.CatalogConnectException] {
+                          if ($attempt -eq 3) { throw }
+                          Write-Warning "WinGet catalog lookup failed on attempt ${attempt}: $($_.Exception.Message)"
+                          Start-Sleep -Seconds (5 * $attempt)
+                      }
+                  }
                   if (@($packages).Count -gt 0) {
                       Write-Host "Found $(@($packages).Count) package(s) for query '$query'"
                       $packages
