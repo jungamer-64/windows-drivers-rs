@@ -15,7 +15,7 @@ NTSTATUS NTAPI wdk_sys_capture_requestor_output(
     pages = IoAllocateMdl(buffer, capacity, FALSE, FALSE, NULL);
     if (pages == NULL) { return STATUS_INSUFFICIENT_RESOURCES; }
     __try { MmProbeAndLockPages(pages, mode, IoWriteAccess); }
-    __except (WDK_SYS_EXPECTED_EXCEPTION) {
+    __except (WDK_SYS_REQUESTOR_ACCESS_EXCEPTION) {
         status = (NTSTATUS)GetExceptionCode();
         if (status != STATUS_ACCESS_VIOLATION && status != STATUS_DATATYPE_MISALIGNMENT &&
             status != STATUS_IN_PAGE_ERROR) { status = STATUS_INVALID_USER_BUFFER; }

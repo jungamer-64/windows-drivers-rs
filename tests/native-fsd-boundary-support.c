@@ -40,7 +40,12 @@ static PVOID NTAPI test_map(PMDL mdl, KPROCESSOR_MODE mode, MEMORY_CACHING_TYPE 
     assert((priority & MdlMappingNoExecute) != 0);
     return mapping_failure ? NULL : output_buffer;
 }
-static BOOLEAN NTAPI test_expected(NTSTATUS status) { return status != (NTSTATUS)0xE0000001UL; }
+/* The documented FsRtl classification: these four statuses are driver faults. */
+static BOOLEAN NTAPI test_expected(NTSTATUS status)
+{
+    return status != STATUS_DATATYPE_MISALIGNMENT && status != STATUS_ACCESS_VIOLATION &&
+        status != STATUS_ILLEGAL_INSTRUCTION && status != STATUS_INSTRUCTION_MISALIGNMENT;
+}
 
 PMDL (NTAPI *__imp_IoAllocateMdl)(PVOID, ULONG, BOOLEAN, BOOLEAN, PIRP) = test_allocate;
 VOID (NTAPI *__imp_IoFreeMdl)(PMDL) = test_free;
@@ -66,6 +71,7 @@ VOID wdk_test_output_faults(VOID)
     PMDL mdl;
     PVOID mapping;
     ULONG index;
+    BOOLEAN propagated;
     const NTSTATUS raised[] = { STATUS_ACCESS_VIOLATION, STATUS_DATATYPE_MISALIGNMENT,
         STATUS_IN_PAGE_ERROR, STATUS_INSUFFICIENT_RESOURCES };
     wdk_test_reset_output();
@@ -85,7 +91,14 @@ VOID wdk_test_output_faults(VOID)
         assert(mdl == NULL && mapping == NULL && page_unlocks == 0);
         assert(mdl_allocations == mdl_frees);
     }
-    probe_exception = STATUS_SUCCESS;
+    /* An instruction fault is not a requestor-memory failure and must reach the outer frame. */
+    probe_exception = STATUS_ILLEGAL_INSTRUCTION;
+    propagated = FALSE;
+    __try { (VOID)wdk_sys_capture_requestor_output(buffer, 32, UserMode, &mdl, &mapping); }
+    __except ((NTSTATUS)GetExceptionCode() == STATUS_ILLEGAL_INSTRUCTION
+        ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) { propagated = TRUE; }
+    assert(propagated);
+    wdk_test_reset_output();
     mapping_failure = TRUE;
     assert(wdk_sys_capture_requestor_output(buffer, 32, UserMode, &mdl, &mapping) == STATUS_INSUFFICIENT_RESOURCES);
     assert(mdl == NULL && mapping == NULL && page_unlocks == 1);
